@@ -22,7 +22,7 @@ fi
 APP_BUNDLE_SRC="assets/macos/Kaku.app"
 APP_BUNDLE_OUT="$OUT_DIR/$APP_NAME.app"
 
-echo "[1/5] Building binaries ($PROFILE)..."
+echo "[1/6] Building binaries ($PROFILE)..."
 if [[ "$PROFILE" == "release" ]]; then
 	cargo build --release -p kaku-gui -p kaku
 	BIN_DIR="$TARGET_DIR/release"
@@ -31,7 +31,7 @@ else
 	BIN_DIR="$TARGET_DIR/debug"
 fi
 
-echo "[2/5] Preparing app bundle..."
+echo "[2/6] Preparing app bundle..."
 rm -rf "$APP_BUNDLE_OUT"
 mkdir -p "$OUT_DIR"
 cp -R "$APP_BUNDLE_SRC" "$APP_BUNDLE_OUT"
@@ -45,10 +45,17 @@ fi
 mkdir -p "$APP_BUNDLE_OUT/Contents/MacOS"
 mkdir -p "$APP_BUNDLE_OUT/Contents/Resources"
 
-echo "[3/5] Copying resources and binaries..."
+echo "[3/6] Downloading vendor dependencies..."
+./scripts/download_vendor.sh
+
+echo "[4/6] Copying resources and binaries..."
 cp -R assets/shell-integration/* "$APP_BUNDLE_OUT/Contents/Resources/"
 cp -R assets/shell-completion "$APP_BUNDLE_OUT/Contents/Resources/"
 cp -R assets/fonts "$APP_BUNDLE_OUT/Contents/Resources/"
+mkdir -p "$APP_BUNDLE_OUT/Contents/Resources/vendor"
+cp -R assets/vendor/* "$APP_BUNDLE_OUT/Contents/Resources/vendor/"
+cp assets/shell-integration/first_run.sh "$APP_BUNDLE_OUT/Contents/Resources/"
+chmod +x "$APP_BUNDLE_OUT/Contents/Resources/first_run.sh"
 
 # Explicitly use the logo.icns from assets if available
 if [[ -f "assets/logo.icns" ]]; then
@@ -65,7 +72,7 @@ done
 # Clean up xattrs to prevent icon caching issues or quarantine
 xattr -cr "$APP_BUNDLE_OUT"
 
-echo "[4/5] Signing app bundle..."
+echo "[5/6] Signing app bundle..."
 codesign --force --deep --sign - "$APP_BUNDLE_OUT"
 
 touch "$APP_BUNDLE_OUT/Contents/Resources/terminal.icns"

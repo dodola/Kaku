@@ -20,12 +20,24 @@
 
 - **Out-of-the-Box Aesthetics**: Beautiful defaults, polished UI/UX, and carefully selected fonts—no configuration needed to look good.
 - **Built for AI Coding**: Optimized for the "Vibe Coding" era, designed to enhance AI-assisted workflows.
+- **Instant Shell Integration**: Comes with **Starship**, **Zsh Syntax Highlighting**, and **Autosuggestions** built-in. One click to set up a pro-level shell environment.
 - **Streamlined & Fast**: Stripped of heavy, unused features from WezTerm. Simplified logic for a cleaner, lighter, and more performant experience.
 - **MacOS Native**: Deeply optimized for macOS, providing a native feel that fits perfectly into your workflow.
 - **GPU Accelerated**: Blazing fast rendering powered by modern GPU APIs.
 - **Lua Configuration**: Retains WezTerm's powerful Lua scripting for infinite customization when you need it.
 
 ## Quick Start
+
+### First Run Experience
+
+When you launch Kaku for the first time, it will offer to automatically configure your shell environment:
+- **Starship Prompt**: Fast, customizable, and cross-shell.
+- **Autosuggestions**: Type less, code faster.
+- **Syntax Highlighting**: Catch errors before you run them.
+
+> Kaku respects your existing config. It backs up your `.zshrc` before making any changes.
+
+### Download & Install
 
 Download the latest release for macOS:
 

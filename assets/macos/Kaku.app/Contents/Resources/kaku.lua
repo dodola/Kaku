@@ -551,4 +551,56 @@ config.webgpu_power_preference = 'HighPerformance'
 config.animation_fps = 60
 config.max_fps = 60
 
+-- ===== First Run Experience =====
+wezterm.on('gui-startup', function(cmd)
+  local home = os.getenv("HOME")
+  -- Use a marker file to track if we've shown the first-run experience
+  local installed_flag = home .. "/.config/kaku/.first_run_completed"
+  local f = io.open(installed_flag, "r")
+  
+  if f then
+    -- Already completed first run
+    f:close()
+    
+    -- If no specific command was requested, spawn the default window
+    if not cmd then
+      local tab, pane, window = wezterm.mux.spawn_window(cmd or {})
+      window:gui_window():maximize()
+    end
+    return
+  end
+
+  -- This is the first run!
+  -- Create the config directory if it doesn't exist
+  os.execute("mkdir -p " .. home .. "/.config/kaku")
+  
+  -- Mark as completed immediately to prevent loop if script fails
+  local f_out = io.open(installed_flag, "w")
+  if f_out then 
+    f_out:write(os.date())
+    f_out:close() 
+  end
+  
+  -- Determine the path to the first_run.sh script within the app bundle
+  local resource_dir = wezterm.executable_dir:gsub("MacOS/?$", "Resources")
+  local first_run_script = resource_dir .. "/first_run.sh"
+  
+  -- Fallback if we can't find it (e.g. running from source)
+  local f_script = io.open(first_run_script, "r")
+  if not f_script then
+      -- Try relative path for dev environment
+      first_run_script = wezterm.executable_dir .. "/../../assets/shell-integration/first_run.sh"
+  else
+      f_script:close()
+  end
+
+  -- Spawn a window running the first run script
+  local tab, pane, window = wezterm.mux.spawn_window {
+    args = { first_run_script },
+    width = 110,
+    height = 30,
+  }
+  window:gui_window():maximize()
+end)
+
 return config
