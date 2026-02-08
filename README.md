@@ -19,11 +19,10 @@
 
 ## Features
 
-- **Zero Config**: Polished defaults with carefully selected fonts and themes.
-- **Built-in Shell Suite**: Comes with Starship, z, Syntax Highlighting, and Autosuggestions.
-- **macOS Native**: Optimized for macOS with smooth animations.
-- **Fast & Lightweight**: GPU-accelerated rendering with a stripped-down, lightweight core.
-- **Lua Scripting**: Infinite customization power via Lua.
+- **Zero Config**: Polished defaults with carefully selected JetBrains Mono font, smooth animations, and a modern dark theme that looks great out of the box.
+- **Built-in Shell Suite**: Comes pre-loaded with a powerful Zsh environment including Starship prompt, z directory jumper, syntax highlighting, and autosuggestions.
+- **Fast & Lightweight**: Built on a stripped-down, GPU-accelerated core that launches instantly and handles heavy workloads with ease.
+- **Lua Scripting**: Retains the full power of WezTerm's Lua configuration engine, allowing for infinite customization and programmable control.
 
 ## Quick Start
 
