@@ -22,7 +22,7 @@
 # although we use OSC 0 for the title rather than OSC 2.
 # https://github.com/neovim/neovim/issues/20706
 # https://github.com/wezterm/wezterm/issues/2635
-wezterm|Wez's terminal emulator,
+kaku|Kaku Terminal,
   Tc,
   hs,
   Su,
