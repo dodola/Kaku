@@ -23,14 +23,14 @@ exclude = [
 opt-level = 3
 debug = false
 strip = true
-lto = true
-codegen-units = 1
+lto = "thin"
+codegen-units = 16
 panic = "abort"
 
 [profile.dev]
 # https://jakedeichert.com/blog/reducing-rust-incremental-compilation-times-on-macos-by-70-percent/
 # Disabled because it breaks builds on Windows
-#split-debuginfo = "unpacked"
+split-debuginfo = "unpacked"
 
 [workspace.dependencies]
 ahash = "0.8"
