@@ -652,7 +652,7 @@ wezterm.on('gui-startup', function(cmd)
     end
 
     wezterm.mux.spawn_window {
-      args = { first_run_script },
+      args = { 'bash', first_run_script },
       width = 106,
       height = 22,
     }
@@ -673,7 +673,7 @@ wezterm.on('gui-startup', function(cmd)
     end
 
     wezterm.mux.spawn_window {
-      args = { update_script },
+      args = { 'bash', update_script },
       width = 80,
       height = 30,
     }
