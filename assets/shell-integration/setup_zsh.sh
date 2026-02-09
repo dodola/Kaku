@@ -107,6 +107,46 @@ setopt APPEND_HISTORY            # Append history to the history file (no overwr
 setopt interactive_comments
 bindkey -e
 
+# Common Aliases (Oh My Zsh compatible)
+alias ll='ls -alF'
+alias la='ls -A'
+alias l='ls -CF'
+
+# Directory Navigation
+alias ...='../..'
+alias ....='../../..'
+alias .....='../../../..'
+alias ......='../../../../..'
+
+alias md='mkdir -p'
+alias rd=rmdir
+
+# Grep Colors
+alias grep='grep --color=auto'
+alias egrep='grep -E --color=auto'
+alias fgrep='grep -F --color=auto'
+
+# Common Git Aliases (The Essentials)
+alias g='git'
+alias ga='git add'
+alias gaa='git add --all'
+alias gb='git branch'
+alias gbd='git branch -d'
+alias gc='git commit -v'
+alias gcmsg='git commit -m'
+alias gco='git checkout'
+alias gcb='git checkout -b'
+alias gd='git diff'
+alias gds='git diff --staged'
+alias gf='git fetch'
+alias gl='git pull'
+alias gp='git push'
+alias gst='git status'
+alias gss='git status -s'
+alias glo='git log --oneline --decorate'
+alias glg='git log --stat'
+alias glgp='git log --stat -p'
+
 # Load Plugins
 autoload -Uz compinit && compinit
 
