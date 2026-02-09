@@ -7,7 +7,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  release:
+  Release:
+    name: Release
     runs-on: macos-latest
     permissions:
       contents: write
@@ -19,19 +20,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Install dependencies
-        run: |
-          brew install create-dmg
+        uses: Swatinem/rust-cache@v2
 
       - name: Build Kaku
         run: |
