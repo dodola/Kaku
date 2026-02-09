@@ -7,7 +7,7 @@
 	<key>CFBundleExecutable</key>
 	<string>kaku-gui</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.github.wez.wezterm</string>
+	<string>fun.tw93.kaku</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>

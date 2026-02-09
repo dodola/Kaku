@@ -35,7 +35,7 @@ _kaku() {
             (start)
 _arguments "${_arguments_options[@]}" \
 '--cwd=[Specify the current working directory for the initially spawned program]:CWD:_files -/' \
-'--class=[Override the default windowing system class. The default is "org.wezfurlong.kaku". Under X11 and Windows this changes the window class. Under Wayland this changes the app_id. This changes the class for all windows spawned by this instance of kaku, including error, update and ssh authentication dialogs]:CLASS: ' \
+'--class=[Override the default windowing system class. The default is "fun.tw93.kaku". Under X11 and Windows this changes the window class. Under Wayland this changes the app_id. This changes the class for all windows spawned by this instance of kaku, including error, update and ssh authentication dialogs]:CLASS: ' \
 '--workspace=[Override the default workspace with the provided name. The default is "default"]:WORKSPACE: ' \
 '--position=[Override the position for the initial window launched by this process.]:POSITION: ' \
 '--domain=[Name of the multiplexer domain section from the configuration to which you'\''d like to connect. If omitted, the default domain will be used]:DOMAIN: ' \
@@ -53,7 +53,7 @@ _arguments "${_arguments_options[@]}" \
 (blocking-start)
 _arguments "${_arguments_options[@]}" \
 '--cwd=[Specify the current working directory for the initially spawned program]:CWD:_files -/' \
-'--class=[Override the default windowing system class. The default is "org.wezfurlong.kaku". Under X11 and Windows this changes the window class. Under Wayland this changes the app_id. This changes the class for all windows spawned by this instance of kaku, including error, update and ssh authentication dialogs]:CLASS: ' \
+'--class=[Override the default windowing system class. The default is "fun.tw93.kaku". Under X11 and Windows this changes the window class. Under Wayland this changes the app_id. This changes the class for all windows spawned by this instance of kaku, including error, update and ssh authentication dialogs]:CLASS: ' \
 '--workspace=[Override the default workspace with the provided name. The default is "default"]:WORKSPACE: ' \
 '--position=[Override the position for the initial window launched by this process.]:POSITION: ' \
 '--domain=[Name of the multiplexer domain section from the configuration to which you'\''d like to connect. If omitted, the default domain will be used]:DOMAIN: ' \
