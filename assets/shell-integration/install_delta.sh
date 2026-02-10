@@ -29,30 +29,30 @@ echo -e "${BOLD}Delta Installation${NC}"
 echo -e "${NC}Git diff beautifier for better code review${NC}"
 echo ""
 
-# Check if delta is already installed
+# Check if delta is already installed in Kaku user bin.
+# Even if already installed, still continue to apply git config defaults.
 if command -v delta &> /dev/null && [[ "$(command -v delta)" == "$USER_BIN_DIR/delta" ]]; then
-    echo -e "${GREEN}✓${NC} Delta is already installed"
-    exit 0
+    echo -e "${GREEN}✓${NC} Delta binary already installed"
+else
+    # Check if vendor delta exists
+    if [[ ! -f "$VENDOR_DELTA" ]]; then
+        echo -e "${YELLOW}⚠${NC}  Delta binary not found in vendor directory"
+        echo -e "${NC}    Expected: $VENDOR_DELTA${NC}"
+        echo ""
+        echo "You can install delta manually:"
+        echo "  brew install git-delta"
+        exit 1
+    fi
+
+    # Create bin directory
+    mkdir -p "$USER_BIN_DIR"
+
+    # Copy delta binary
+    echo -n "  Installing delta binary... "
+    cp "$VENDOR_DELTA" "$USER_BIN_DIR/delta"
+    chmod +x "$USER_BIN_DIR/delta"
+    echo -e "${GREEN}✓${NC}"
 fi
-
-# Check if vendor delta exists
-if [[ ! -f "$VENDOR_DELTA" ]]; then
-    echo -e "${YELLOW}⚠${NC}  Delta binary not found in vendor directory"
-    echo -e "${NC}    Expected: $VENDOR_DELTA${NC}"
-    echo ""
-    echo "You can install delta manually:"
-    echo "  brew install git-delta"
-    exit 1
-fi
-
-# Create bin directory
-mkdir -p "$USER_BIN_DIR"
-
-# Copy delta binary
-echo -n "  Installing delta binary... "
-cp "$VENDOR_DELTA" "$USER_BIN_DIR/delta"
-chmod +x "$USER_BIN_DIR/delta"
-echo -e "${GREEN}✓${NC}"
 
 # Configure git to use delta
 echo -n "  Configuring git... "
@@ -60,7 +60,8 @@ git config --global core.pager "delta"
 git config --global interactive.diffFilter "delta --color-only"
 git config --global delta.navigate true
 git config --global delta.line-numbers true
-git config --global delta.side-by-side false  # Default to normal mode (cleaner)
+git config --global delta.side-by-side true
+git config --global delta.line-fill-method "spaces"
 echo -e "${GREEN}✓${NC}"
 
 # Set delta theme
@@ -77,6 +78,7 @@ echo -e "${GREEN}✓${NC}"
 
 echo ""
 echo -e "${GREEN}${BOLD}✓ Delta installed successfully!${NC}"
+echo -e "${NC}  Default view: side-by-side with line numbers${NC}"
 echo ""
 echo -e "${BOLD}Usage:${NC}"
 echo -e "  ${NC}Delta works automatically with git commands:${NC}"
