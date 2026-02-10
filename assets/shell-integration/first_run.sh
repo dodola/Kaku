@@ -8,7 +8,7 @@ set -euo pipefail
 # when optional setup steps fail on user machines.
 persist_config_version() {
 	mkdir -p "$HOME/.config/kaku"
-	echo "4" >"$HOME/.config/kaku/.kaku_config_version"
+	echo "5" >"$HOME/.config/kaku/.kaku_config_version"
 }
 trap persist_config_version EXIT
 
@@ -106,25 +106,43 @@ else
 fi
 
 mkdir -p "$HOME/.config/kaku"
+VERSION_FILE="$HOME/.config/kaku/.kaku_config_version"
+USER_CONFIG_VERSION=0
+if [[ -f "$VERSION_FILE" ]]; then
+	RAW_VERSION="$(cat "$VERSION_FILE" 2>/dev/null || true)"
+	if [[ "$RAW_VERSION" =~ ^[0-9]+$ ]]; then
+		USER_CONFIG_VERSION="$RAW_VERSION"
+	fi
+fi
 
 # Process Kaku Theme
 if [[ "$INSTALL_THEME" == "true" ]]; then
 	KAKU_LUA_SRC="$RESOURCES_DIR/kaku.lua"
 	KAKU_LUA_DEST="$HOME/.config/kaku/kaku.lua"
 
-	if [[ -f "$KAKU_LUA_SRC" ]]; then
-		echo "Installing Kaku theme..."
-		cp "$KAKU_LUA_SRC" "$KAKU_LUA_DEST"
+		if [[ -f "$KAKU_LUA_SRC" ]]; then
+			if [[ -f "$KAKU_LUA_DEST" && "$USER_CONFIG_VERSION" -ne 1 ]]; then
+				echo "Detected existing custom kaku.lua, skipping automatic overwrite."
+				echo "To apply theme manually, review: $KAKU_LUA_SRC"
+			else
+				if [[ -f "$KAKU_LUA_DEST" ]]; then
+					BACKUP_FILE="$KAKU_LUA_DEST.kaku-backup-$(date +%s)"
+					cp "$KAKU_LUA_DEST" "$BACKUP_FILE"
+					echo "Detected v1 config, backup created at: $BACKUP_FILE"
+				fi
 
-		# Inject Kaku theme before the return statement
-		# We use a temporary file to construct the new content
-		TMP_FILE=$(mktemp)
+				echo "Installing Kaku theme..."
+				cp "$KAKU_LUA_SRC" "$KAKU_LUA_DEST"
 
-		# Read all lines except the last one (return config)
-		sed '$d' "$KAKU_LUA_DEST" >"$TMP_FILE"
+				# Inject Kaku theme before the return statement
+				# We use a temporary file to construct the new content
+				TMP_FILE=$(mktemp)
 
-		# Append Kaku theme config
-		cat <<EOF >>"$TMP_FILE"
+				# Read all lines except the last one (return config)
+				sed '$d' "$KAKU_LUA_DEST" >"$TMP_FILE"
+
+				# Append Kaku theme config
+				cat <<EOF >>"$TMP_FILE"
 
 -- ===== Kaku Theme =====
 config.colors = {
@@ -171,11 +189,12 @@ config.window_frame = {
 
 return config
 EOF
-		mv "$TMP_FILE" "$KAKU_LUA_DEST"
-		echo "Kaku theme applied!"
-	else
-		echo "Warning: Could not find kaku.lua source at $KAKU_LUA_SRC"
-	fi
+				mv "$TMP_FILE" "$KAKU_LUA_DEST"
+				echo "Kaku theme applied!"
+			fi
+		else
+			echo "Warning: Could not find kaku.lua source at $KAKU_LUA_SRC"
+		fi
 fi
 
 # Process Delta Installation

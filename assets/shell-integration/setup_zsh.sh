@@ -157,7 +157,7 @@ alias glgp='git log --stat -p'
 
 # Optimized compinit: Use cache and only rebuild when needed (~30ms saved)
 autoload -Uz compinit
-if [[ -n "\${ZDOTDIR}/.zcompdump"(#qN.mh+24) ]]; then
+if [[ -n "\${ZDOTDIR:-\$HOME}/.zcompdump"(#qN.mh+24) ]]; then
     # Rebuild completion cache if older than 24 hours
     compinit
 else
