@@ -818,40 +818,49 @@ impl ParsedFont {
 /// sane fallback fonts.
 /// This function loads those.
 pub(crate) fn load_built_in_fonts(font_info: &mut Vec<ParsedFont>) -> anyhow::Result<()> {
-    #[allow(unused_macros)]
-    macro_rules! font {
-        ($font:literal) => {
-            (include_bytes!($font) as &'static [u8], $font)
-        };
-    }
-    let lib = crate::ftwrap::Library::new()?;
+    static CACHE: Mutex<Option<Vec<ParsedFont>>> = Mutex::new(None);
 
-    let built_ins: &[&[(&[u8], &str)]] = &[
-        #[cfg(any(test, feature = "vendor-jetbrains"))]
-        &[
-            font!("../../../assets/fonts/JetBrainsMono-Regular.ttf"),
-        ],
-        #[cfg(any(test, feature = "vendor-nerd-font-symbols"))]
-        &[font!(
-            "../../../assets/fonts/SymbolsNerdFontMono-Regular.ttf"
-        )],
-    ];
-    for bundle in built_ins {
-        for (data, name) in bundle.iter() {
-            let locator = FontDataHandle {
-                source: FontDataSource::BuiltIn { data, name },
-                index: 0,
-                variation: 0,
-                origin: FontOrigin::BuiltIn,
-                coverage: None,
+    let mut cache = CACHE.lock().unwrap();
+    if cache.is_none() {
+        #[allow(unused_macros)]
+        macro_rules! font {
+            ($font:literal) => {
+                (include_bytes!($font) as &'static [u8], $font)
             };
-            let face = lib.face_from_locator(&locator)?;
-            let mut parsed = ParsedFont::from_face(&face, locator)?;
-            parsed.is_built_in_fallback = true;
-            font_info.push(parsed);
         }
+        let lib = crate::ftwrap::Library::new()?;
+
+        let built_ins: &[&[(&[u8], &str)]] = &[
+            #[cfg(any(test, feature = "vendor-jetbrains"))]
+            &[
+                font!("../../../assets/fonts/JetBrainsMono-Regular.ttf"),
+            ],
+            #[cfg(any(test, feature = "vendor-nerd-font-symbols"))]
+            &[font!(
+                "../../../assets/fonts/SymbolsNerdFontMono-Regular.ttf"
+            )],
+        ];
+
+        let mut parsed_fonts = vec![];
+        for bundle in built_ins {
+            for (data, name) in bundle.iter() {
+                let locator = FontDataHandle {
+                    source: FontDataSource::BuiltIn { data, name },
+                    index: 0,
+                    variation: 0,
+                    origin: FontOrigin::BuiltIn,
+                    coverage: None,
+                };
+                let face = lib.face_from_locator(&locator)?;
+                let mut parsed = ParsedFont::from_face(&face, locator)?;
+                parsed.is_built_in_fallback = true;
+                parsed_fonts.push(parsed);
+            }
+        }
+        *cache = Some(parsed_fonts);
     }
 
+    font_info.extend_from_slice(cache.as_ref().unwrap());
     Ok(())
 }
 
