@@ -1760,11 +1760,15 @@ pub(crate) fn compute_data_dir() -> anyhow::Result<PathBuf> {
 }
 
 pub(crate) fn compute_runtime_dir() -> anyhow::Result<PathBuf> {
-    if let Some(runtime) = dirs_next::runtime_dir() {
-        return Ok(runtime.join("kaku"));
-    }
+    let dir = if let Some(runtime) = dirs_next::runtime_dir() {
+        runtime.join("kaku")
+    } else {
+        crate::HOME_DIR.join(".local/share/kaku")
+    };
 
-    Ok(crate::HOME_DIR.join(".local/share/kaku"))
+    crate::create_user_owned_dirs(&dir).ok();
+
+    Ok(dir)
 }
 
 pub fn pki_dir() -> anyhow::Result<PathBuf> {

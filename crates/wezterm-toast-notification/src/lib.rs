@@ -1,4 +1,7 @@
+#[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "linux")]
+mod linux;
 
 #[derive(Debug, Clone)]
 pub struct ToastNotification {
@@ -14,7 +17,10 @@ impl ToastNotification {
     }
 }
 
+#[cfg(target_os = "macos")]
 use macos as backend;
+#[cfg(target_os = "linux")]
+use linux as backend;
 
 pub fn show(notif: ToastNotification) {
     if let Err(err) = backend::show_notif(notif) {
