@@ -19,6 +19,12 @@ pub struct UmaskSaver {
     mask: mode_t,
 }
 
+impl Default for UmaskSaver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl UmaskSaver {
     pub fn new() -> Self {
         let me = Self {

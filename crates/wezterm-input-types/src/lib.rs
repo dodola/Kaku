@@ -1278,6 +1278,8 @@ pub struct MouseEvent {
     pub screen_coords: crate::ScreenPoint,
     pub mouse_buttons: MouseButtons,
     pub modifiers: Modifiers,
+    /// OS-reported click count (1=single, 2=double, etc.)
+    pub click_count: u32,
 }
 
 #[derive(Debug, Clone)]

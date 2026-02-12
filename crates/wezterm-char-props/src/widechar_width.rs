@@ -17,7 +17,6 @@
  *  EastAsianWidth.txt:  0885c0fc1c21eb58954a3bfb785d78559b361d92
  *  emoji-data.txt:      1df2f8329dd9f5c238674807de736f316c6b9d87
  */
-
 type R = (u32, u32);
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -1527,34 +1526,34 @@ impl WcWidth {
     /// Return the width of character c
     pub fn from_char(c: char) -> Self {
         let c = c as u32;
-        if in_table(&ASCII_TABLE, c) {
+        if in_table(ASCII_TABLE, c) {
             return Self::One;
         }
-        if in_table(&PRIVATE_TABLE, c) {
+        if in_table(PRIVATE_TABLE, c) {
             return Self::PrivateUse;
         }
-        if in_table(&NONPRINT_TABLE, c) {
+        if in_table(NONPRINT_TABLE, c) {
             return Self::NonPrint;
         }
-        if in_table(&NONCHAR_TABLE, c) {
+        if in_table(NONCHAR_TABLE, c) {
             return Self::NonCharacter;
         }
-        if in_table(&COMBINING_TABLE, c) {
+        if in_table(COMBINING_TABLE, c) {
             return Self::Combining;
         }
-        if in_table(&COMBININGLETTERS_TABLE, c) {
+        if in_table(COMBININGLETTERS_TABLE, c) {
             return Self::Combining;
         }
-        if in_table(&DOUBLEWIDE_TABLE, c) {
+        if in_table(DOUBLEWIDE_TABLE, c) {
             return Self::Two;
         }
-        if in_table(&AMBIGUOUS_TABLE, c) {
+        if in_table(AMBIGUOUS_TABLE, c) {
             return Self::Ambiguous;
         }
-        if in_table(&UNASSIGNED_TABLE, c) {
+        if in_table(UNASSIGNED_TABLE, c) {
             return Self::Unassigned;
         }
-        if in_table(&WIDENED_TABLE, c) {
+        if in_table(WIDENED_TABLE, c) {
             return Self::WidenedIn9;
         }
         Self::One
@@ -1591,6 +1590,12 @@ impl WcWidth {
 /// it is resolved to)
 pub struct WcLookupTable {
     pub table: [WcWidth; 65536],
+}
+
+impl Default for WcLookupTable {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl WcLookupTable {

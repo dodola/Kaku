@@ -26,8 +26,7 @@ mod imp {
     use std::cmp::Ordering;
     use std::fs;
     use std::io::Write;
-    use std::path::Component;
-    use std::path::{Path, PathBuf};
+    use std::path::{Component, Path, PathBuf};
     use std::process::{Command, Stdio};
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -73,7 +72,8 @@ mod imp {
         }
 
         let current_version = config::wezterm_version().to_string();
-        println!("Current version: {}", current_version);
+        let current_version_display = format_version_for_display(&current_version);
+        println!("Current version: {}", current_version_display);
         println!("Checking latest release...");
 
         let release = match curl_get_text(RELEASE_API_URL, &current_version)
@@ -95,7 +95,8 @@ mod imp {
             if !is_newer_version(&release.tag_name, &current_version) {
                 println!(
                     "Already up to date. Current={} Latest={}",
-                    current_version, release.tag_name
+                    current_version_display,
+                    format_version_for_display(&release.tag_name)
                 );
                 return Ok(());
             }
@@ -103,7 +104,8 @@ mod imp {
             if !is_newer_version(&tag_name, &current_version) {
                 println!(
                     "Already up to date. Current={} Latest={}",
-                    current_version, tag_name
+                    current_version_display,
+                    format_version_for_display(&tag_name)
                 );
                 return Ok(());
             }
@@ -175,7 +177,8 @@ mod imp {
             if !is_newer_version(&new_version, &current_version) {
                 println!(
                     "Already up to date after download. Current={} Package={}",
-                    current_version, new_version
+                    current_version_display,
+                    format_version_for_display(&new_version)
                 );
                 let _ = fs::remove_dir_all(&work_dir);
                 return Ok(());
@@ -195,7 +198,10 @@ mod imp {
             .as_ref()
             .map(|r| r.tag_name.as_str())
             .unwrap_or("latest");
-        println!("Update to {} has started in background.", update_label);
+        println!(
+            "Update to {} has started in background.",
+            format_version_for_display(update_label)
+        );
         println!("Kaku will quit and relaunch automatically when replacement is complete.");
         Ok(())
     }
@@ -736,6 +742,10 @@ log "done"
             Some(_) => false,
             None => latest.trim_start_matches(['v', 'V']) != current.trim_start_matches(['v', 'V']),
         }
+    }
+
+    fn format_version_for_display(version: &str) -> String {
+        version.trim().trim_start_matches(['v', 'V']).to_string()
     }
 
     fn compare_versions(left: &str, right: &str) -> Option<Ordering> {

@@ -336,19 +336,23 @@ impl OscState {
             }
         } else if !self.full {
             let mut buf = [0u8; 8];
-            let extend_result = self
-                .buffer
-                .extend_from_slice(param.encode_utf8(&mut buf).as_bytes());
-
             #[cfg(all(not(feature = "std"), not(feature = "alloc")))]
             {
-                if extend_result.is_err() {
+                if self
+                    .buffer
+                    .extend_from_slice(param.encode_utf8(&mut buf).as_bytes())
+                    .is_err()
+                {
                     self.full = true;
                     return;
                 }
             }
 
-            let _ = extend_result;
+            #[cfg(any(feature = "std", feature = "alloc"))]
+            {
+                self.buffer
+                    .extend_from_slice(param.encode_utf8(&mut buf).as_bytes());
+            }
 
             if self.num_params == 0 {
                 self.num_params = 1;

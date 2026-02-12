@@ -20,6 +20,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
 use wezterm_client::domain::ClientDomain;
 use wezterm_font::FontConfiguration;
 use wezterm_gui_subcommands::{name_equals_value, StartCommand};
@@ -191,7 +192,9 @@ async fn spawn_tab_in_domain_if_mux_is_empty(
     let dpi = config.dpi.unwrap_or_else(|| ::window::default_dpi());
     let _tab = domain
         .spawn(
-            config.initial_size(dpi as u32, Some(cell_pixel_dims(&config, dpi)?)),
+            // Keep spawn path light; GUI will publish definitive pixel geometry
+            // right after the first window is created.
+            config.initial_size(dpi as u32, None),
             cmd,
             None,
             window_id,
@@ -282,20 +285,24 @@ async fn async_run_terminal_gui(
         log::warn!("{:#}", err);
     }
 
+    let default_domain_is_local = Mux::get().default_domain().domain_name() == "local";
+    if default_domain_is_local {
+        promise::spawn::spawn_with_low_priority(async {
+            if let Err(err) = update_mux_domains(&config::configuration()) {
+                log::warn!("deferred update_mux_domains failed: {err:#}");
+                return;
+            }
+            if let Err(err) = connect_to_auto_connect_domains().await {
+                log::warn!("deferred auto-connect domains failed: {err:#}");
+            }
+        })
+        .detach();
+    }
+
     if !opts.no_auto_connect {
-        let default_domain_is_local = Mux::get().default_domain().domain_name() == "local";
         let explicit_domain_requested = opts.domain.is_some();
 
-        if default_domain_is_local && !explicit_domain_requested {
-            promise::spawn::spawn_with_low_priority(async {
-                if let Err(err) = connect_to_auto_connect_domains().await {
-                    log::warn!(
-                        "auto-connect domains failed in background (startup continues): {err:#}"
-                    );
-                }
-            })
-            .detach();
-        } else {
+        if !(default_domain_is_local && !explicit_domain_requested) {
             // Preserve existing startup semantics when the startup target
             // is a non-local/explicit domain.
             connect_to_auto_connect_domains().await?;
@@ -352,7 +359,9 @@ async fn async_run_terminal_gui(
             let dpi = config.dpi.unwrap_or_else(|| ::window::default_dpi());
             let tab = domain
                 .spawn(
-                    config.initial_size(dpi as u32, Some(cell_pixel_dims(&config, dpi)?)),
+                    // Keep spawn path light; GUI will publish definitive pixel geometry
+                    // right after the first window is created.
+                    config.initial_size(dpi as u32, None),
                     cmd.clone(),
                     None,
                     window_id,
@@ -371,6 +380,7 @@ async fn async_run_terminal_gui(
 }
 
 #[derive(Debug)]
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 enum Publish {
     TryPathOrPublish(PathBuf),
     NoConnectNoPublish,
@@ -379,27 +389,42 @@ enum Publish {
 
 impl Publish {
     pub fn resolve(mux: &Arc<Mux>, config: &ConfigHandle, always_new_process: bool) -> Self {
-        if mux.default_domain().domain_name() != config.default_domain.as_deref().unwrap_or("local")
+        #[cfg(target_os = "macos")]
         {
-            return Self::NoConnectNoPublish;
+            // macOS launch paths can retain stale gui-sock symlinks briefly
+            // around app relaunch, which makes single-instance handoff add
+            // noticeable startup latency. Prefer predictable fast startup.
+            let _ = mux;
+            let _ = config;
+            let _ = always_new_process;
+            return Self::NoConnectButPublish;
         }
 
-        if always_new_process {
-            return Self::NoConnectNoPublish;
-        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            if mux.default_domain().domain_name()
+                != config.default_domain.as_deref().unwrap_or("local")
+            {
+                return Self::NoConnectNoPublish;
+            }
 
-        if config::is_config_overridden() {
-            // They're using a specific config file: assume that it is
-            // different from the running gui
-            log::trace!("skip existing gui: config is different");
-            return Self::NoConnectNoPublish;
-        }
+            if always_new_process {
+                return Self::NoConnectNoPublish;
+            }
 
-        match wezterm_client::discovery::resolve_gui_sock_path(
-            &crate::termwindow::get_window_class(),
-        ) {
-            Ok(path) => Self::TryPathOrPublish(path),
-            Err(_) => Self::NoConnectButPublish,
+            if config::is_config_overridden() {
+                // They're using a specific config file: assume that it is
+                // different from the running gui
+                log::trace!("skip existing gui: config is different");
+                return Self::NoConnectNoPublish;
+            }
+
+            return match wezterm_client::discovery::resolve_gui_sock_path(
+                &crate::termwindow::get_window_class(),
+            ) {
+                Ok(path) => Self::TryPathOrPublish(path),
+                Err(_) => Self::NoConnectButPublish,
+            };
         }
     }
 
@@ -419,9 +444,27 @@ impl Publish {
         new_tab: bool,
     ) -> anyhow::Result<bool> {
         if let Publish::TryPathOrPublish(gui_sock) = &self {
+            #[cfg(unix)]
+            {
+                if let Err(err) = std::os::unix::net::UnixStream::connect(gui_sock) {
+                    // Fast-path stale socket detection to avoid paying the
+                    // client retry backoff (which feels like slow startup).
+                    log::trace!(
+                        "existing gui socket {} is not connectable: {:#}",
+                        gui_sock.display(),
+                        err
+                    );
+                    return Ok(false);
+                }
+            }
+
             let dom = config::UnixDomain {
                 socket_path: Some(gui_sock.clone()),
                 no_serve_automatically: true,
+                // Keep single-instance handoff snappy; if the running
+                // instance is unhealthy, fail fast and start a fresh GUI.
+                read_timeout: Duration::from_millis(250),
+                write_timeout: Duration::from_millis(250),
                 ..Default::default()
             };
             let mut ui = mux::connui::ConnectionUI::new_headless();
@@ -447,35 +490,12 @@ impl Publish {
                             );
                         }
 
-                        let window_id = if new_tab || config.prefer_to_spawn_tabs {
-                            if let Ok(pane_id) = client.resolve_pane_id(None).await {
-                                let panes = client.list_panes().await?;
-
-                                let mut window_id = None;
-                                'outer: for tabroot in panes.tabs {
-                                    let mut cursor = tabroot.into_tree().cursor();
-
-                                    loop {
-                                        if let Some(entry) = cursor.leaf_mut() {
-                                            if entry.pane_id == pane_id {
-                                                window_id.replace(entry.window_id);
-                                                break 'outer;
-                                            }
-                                        }
-                                        match cursor.preorder_next() {
-                                            Ok(c) => cursor = c,
-                                            Err(_) => break,
-                                        }
-                                    }
-                                }
-                                window_id
-
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        };
+                        // Keep the cross-process spawn path minimal and robust:
+                        // send a single spawn request and let the running GUI
+                        // place it using its default behavior.
+                        let _ = new_tab;
+                        let _ = config;
+                        let window_id = None;
 
                         client
                             .spawn_v2(codec::SpawnV2 {
@@ -496,7 +516,7 @@ impl Publish {
 
                     match res {
                         Ok(res) => {
-                            log::info!(
+                            log::debug!(
                                 "Spawned your command via the existing GUI instance. \
                              Use kaku start --always-new-process if you do not want this behavior. \
                              Result={:?}",
@@ -569,11 +589,14 @@ fn setup_mux(
             .unwrap_or(mux::DEFAULT_WORKSPACE),
     );
     mux.set_active_workspace(&default_workspace_name);
-    crate::update::load_last_release_info_and_set_banner();
-    update_mux_domains(config)?;
 
     let default_name =
         default_domain_name.unwrap_or(config.default_domain.as_deref().unwrap_or("local"));
+    // Startup fast-path: if local is the default domain, defer scanning and
+    // constructing additional domains until after first window appears.
+    if default_name != "local" {
+        update_mux_domains(config)?;
+    }
 
     let domain = mux.get_domain_by_name(default_name).ok_or_else(|| {
         anyhow::anyhow!(
@@ -604,6 +627,18 @@ fn run_terminal_gui(opts: StartCommand, default_domain_name: Option<String>) -> 
     }
 
     let config = config::configuration();
+
+    // Prewarm the built-in font FreeType cache in a background thread so that
+    // FontConfiguration::new() in new_window() hits the static cache instead of
+    // blocking the async startup path.  Safe to call concurrently: the cache is
+    // a Mutex<Option<...>> and FontDatabase::with_built_in() is idempotent.
+    std::thread::Builder::new()
+        .name("font-prewarm".into())
+        .spawn(|| {
+            let _ = wezterm_font::db::FontDatabase::with_built_in();
+        })
+        .ok();
+
     let need_builder = !opts.prog.is_empty() || opts.cwd.is_some();
 
     let cmd = if need_builder {
@@ -768,7 +803,6 @@ fn run() -> anyhow::Result<()> {
     config::lua::add_context_setup_func(crate::scripting::register);
     config::lua::add_context_setup_func(crate::stats::register);
 
-    stats::Stats::init()?;
     let _saver = umask::UmaskSaver::new();
 
     config::common_init(
@@ -776,6 +810,7 @@ fn run() -> anyhow::Result<()> {
         &opts.config_override,
         opts.skip_config,
     )?;
+    stats::Stats::init()?;
     let config = config::configuration();
     if let Some(value) = &config.default_ssh_auth_sock {
         std::env::set_var("SSH_AUTH_SOCK", value);

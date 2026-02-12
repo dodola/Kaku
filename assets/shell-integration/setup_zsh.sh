@@ -134,7 +134,7 @@ if [[ ! -f "$STARSHIP_CONFIG" ]]; then
 	fi
 fi
 
-# 3. Create/Update Kaku Init File (The Clean Way)
+# 3. Create/Update Kaku Init File (managed by Kaku)
 cat <<EOF >"$KAKU_INIT_FILE"
 # Kaku Zsh Integration - DO NOT EDIT MANUALLY
 # This file is managed by Kaku.app. Any changes may be overwritten.
@@ -232,6 +232,10 @@ fi
 
 # Load zsh-z (smart directory jumping) - Fast, no delay needed
 if [[ -f "\$KAKU_ZSH_DIR/plugins/zsh-z/zsh-z.plugin.zsh" ]]; then
+    # Default to smart case matching so `z kaku` prefers `Kaku` over lowercase
+    # path entries. Users can still override this in their own shell config.
+    : "\${ZSHZ_CASE:=smart}"
+    export ZSHZ_CASE
     source "\$KAKU_ZSH_DIR/plugins/zsh-z/zsh-z.plugin.zsh"
 fi
 

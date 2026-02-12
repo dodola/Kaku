@@ -1,4 +1,5 @@
 #![cfg_attr(not(feature = "std"), no_std)]
+#![allow(clippy::redundant_static_lifetimes)]
 pub mod emoji;
 pub mod emoji_presentation;
 pub mod emoji_variation;

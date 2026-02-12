@@ -141,24 +141,37 @@ impl Default for SplitRequest {
     }
 }
 
+/// Returns the column gutter for a horizontal (left|right) split.
+/// With gap = N: 1 center cell + N cells on each side = 1 + 2*N columns.
+fn split_col_gutter() -> usize {
+    (1 + 2 * configuration().split_pane_gap as usize).max(1)
+}
+
+/// Returns the row gutter for a vertical (top|bottom) split.
+/// Cell height is ~2× cell width, so use gap rows (min 1) to roughly match
+/// the pixel gap of split_col_gutter: gap=2 → 2 rows ≈ 22px/side ≈ 25px horizontal.
+fn split_row_gutter() -> usize {
+    (configuration().split_pane_gap as usize).max(1)
+}
+
 impl SplitDirectionAndSize {
     fn top_of_second(&self) -> usize {
         match self.direction {
             SplitDirection::Horizontal => 0,
-            SplitDirection::Vertical => self.first.rows as usize + 1,
+            SplitDirection::Vertical => self.first.rows as usize + split_row_gutter(),
         }
     }
 
     fn left_of_second(&self) -> usize {
         match self.direction {
-            SplitDirection::Horizontal => self.first.cols as usize + 1,
+            SplitDirection::Horizontal => self.first.cols as usize + split_col_gutter(),
             SplitDirection::Vertical => 0,
         }
     }
 
     pub fn width(&self) -> usize {
         if self.direction == SplitDirection::Horizontal {
-            self.first.cols + self.second.cols + 1
+            self.first.cols + self.second.cols + split_col_gutter()
         } else {
             self.first.cols
         }
@@ -166,7 +179,7 @@ impl SplitDirectionAndSize {
 
     pub fn height(&self) -> usize {
         if self.direction == SplitDirection::Vertical {
-            self.first.rows + self.second.rows + 1
+            self.first.rows + self.second.rows + split_row_gutter()
         } else {
             self.first.rows
         }
@@ -327,8 +340,12 @@ fn compute_min_size(tree: &mut Tree) -> (usize, usize) {
             let (left_x, left_y) = compute_min_size(&mut *left);
             let (right_x, right_y) = compute_min_size(&mut *right);
             match data.direction {
-                SplitDirection::Vertical => (left_x.max(right_x), left_y + right_y + 1),
-                SplitDirection::Horizontal => (left_x + right_x + 1, left_y.max(right_y)),
+                SplitDirection::Vertical => {
+                    (left_x.max(right_x), left_y + right_y + split_row_gutter())
+                }
+                SplitDirection::Horizontal => {
+                    (left_x + right_x + split_col_gutter(), left_y.max(right_y))
+                }
             }
         }
         Tree::Leaf(_) => (1, 1),
@@ -1125,8 +1142,12 @@ impl TabInner {
                 }
                 if let Ok(Some(node)) = cursor.node_mut() {
                     match node.direction {
-                        SplitDirection::Horizontal => left += node.first.cols as usize,
-                        SplitDirection::Vertical => top += node.first.rows as usize,
+                        SplitDirection::Horizontal => {
+                            left += node.first.cols as usize + split_col_gutter() / 2
+                        }
+                        SplitDirection::Vertical => {
+                            top += node.first.rows as usize + split_row_gutter() / 2
+                        }
                     }
 
                     dividers.push(PositionedSplit {
@@ -1224,12 +1245,16 @@ impl TabInner {
                 node.first.rows = pane_size.rows;
                 node.second.rows = pane_size.rows;
 
-                node.second.cols = pane_size.cols.saturating_sub(1 + node.first.cols);
+                node.second.cols = pane_size
+                    .cols
+                    .saturating_sub(split_col_gutter() + node.first.cols);
             } else {
                 node.first.cols = pane_size.cols;
                 node.second.cols = pane_size.cols;
 
-                node.second.rows = pane_size.rows.saturating_sub(1 + node.first.rows);
+                node.second.rows = pane_size
+                    .rows
+                    .saturating_sub(split_row_gutter() + node.first.rows);
             }
             node.first.pixel_width = node.first.cols * cell_width;
             node.first.pixel_height = node.first.rows * cell_height;
@@ -1360,7 +1385,8 @@ impl TabInner {
                     node.first.pixel_width =
                         node.first.cols.saturating_mul(cell_dimensions.pixel_width);
 
-                    node.second.cols = width.saturating_sub(node.first.cols.saturating_add(1));
+                    node.second.cols =
+                        width.saturating_sub(node.first.cols.saturating_add(split_col_gutter()));
                     node.second.pixel_width =
                         node.second.cols.saturating_mul(cell_dimensions.pixel_width);
                 }
@@ -1376,7 +1402,8 @@ impl TabInner {
                     node.first.pixel_height =
                         node.first.rows.saturating_mul(cell_dimensions.pixel_height);
 
-                    node.second.rows = height.saturating_sub(node.first.rows.saturating_add(1));
+                    node.second.rows =
+                        height.saturating_sub(node.first.rows.saturating_add(split_row_gutter()));
                     node.second.pixel_height = node
                         .second
                         .rows
@@ -1965,14 +1992,14 @@ impl TabInner {
     ) -> Option<SplitDirectionAndSize> {
         let cell_dims = self.cell_dimensions();
 
-        fn split_dimension(dim: usize, request: SplitRequest) -> (usize, usize) {
+        fn split_dimension(dim: usize, request: SplitRequest, gutter: usize) -> (usize, usize) {
             let target_size = match request.size {
                 SplitSize::Cells(n) => n,
                 SplitSize::Percent(n) => (dim * (n as usize)) / 100,
             }
             .max(1);
 
-            let remain = dim.saturating_sub(target_size + 1);
+            let remain = dim.saturating_sub(target_size + gutter);
 
             if request.target_is_second {
                 (remain, target_size)
@@ -1986,12 +2013,12 @@ impl TabInner {
 
             let ((width1, width2), (height1, height2)) = match request.direction {
                 SplitDirection::Horizontal => (
-                    split_dimension(size.cols as usize, request),
+                    split_dimension(size.cols as usize, request, split_col_gutter()),
                     (size.rows as usize, size.rows as usize),
                 ),
                 SplitDirection::Vertical => (
                     (size.cols as usize, size.cols as usize),
-                    split_dimension(size.rows as usize, request),
+                    split_dimension(size.rows as usize, request, split_row_gutter()),
                 ),
             };
 
@@ -2021,12 +2048,13 @@ impl TabInner {
         self.iter_panes().iter().nth(pane_index).map(|pos| {
             let ((width1, width2), (height1, height2)) = match request.direction {
                 SplitDirection::Horizontal => (
-                    split_dimension(pos.width, request),
+                    split_dimension(pos.width, request, split_col_gutter()),
                     (pos.height, pos.height),
                 ),
-                SplitDirection::Vertical => {
-                    ((pos.width, pos.width), split_dimension(pos.height, request))
-                }
+                SplitDirection::Vertical => (
+                    (pos.width, pos.width),
+                    split_dimension(pos.height, request, split_row_gutter()),
+                ),
             };
 
             SplitDirectionAndSize {
@@ -2371,7 +2399,7 @@ mod test {
         fn reader(&self) -> anyhow::Result<Option<Box<dyn std::io::Read + Send>>> {
             Ok(None)
         }
-        fn writer(&self) -> MappedMutexGuard<dyn std::io::Write> {
+        fn writer(&self) -> MappedMutexGuard<'_, dyn std::io::Write> {
             unimplemented!()
         }
         fn resize(&self, size: TerminalSize) -> anyhow::Result<()> {

@@ -189,7 +189,35 @@ done
 xattr -cr "$APP_BUNDLE_OUT"
 
 echo "[5/7] Signing app bundle..."
-codesign --force --deep --sign - "$APP_BUNDLE_OUT"
+# Signing strategy:
+# - Dev builds (PROFILE=dev): Always use ad-hoc signing (-) for speed
+# - Release builds (PROFILE=release/release-opt): Use KAKU_SIGNING_IDENTITY if set, otherwise ad-hoc
+# Usage with developer certificate:
+#   KAKU_SIGNING_IDENTITY="Apple Development: Your Name" ./scripts/build.sh
+if [[ "$PROFILE" == "dev" || "$PROFILE" == "debug" ]]; then
+	SIGNING_IDENTITY="-"
+	echo "Dev build: using ad-hoc signing"
+else
+	SIGNING_IDENTITY="${KAKU_SIGNING_IDENTITY:--}"
+	if [[ "$SIGNING_IDENTITY" != "-" ]]; then
+		echo "Release build: signing with developer certificate"
+	else
+		echo "Release build: using ad-hoc signing (set KAKU_SIGNING_IDENTITY for developer certificate)"
+	fi
+fi
+
+# Sign vendored binaries before signing the main app bundle
+echo "[5.5/7] Signing vendored binaries..."
+VENDOR_BINARIES=("starship" "delta" "zoxide")
+for bin_name in "${VENDOR_BINARIES[@]}"; do
+	bin_path="$APP_BUNDLE_OUT/Contents/Resources/vendor/$bin_name"
+	if [[ -f "$bin_path" && "$SIGNING_IDENTITY" != "-" ]]; then
+		echo "Signing vendor binary: $bin_name"
+		codesign --force --sign "$SIGNING_IDENTITY" --options runtime "$bin_path" || echo "Warning: Failed to sign $bin_name"
+	fi
+done
+
+codesign --force --deep --options runtime --sign "$SIGNING_IDENTITY" "$APP_BUNDLE_OUT"
 
 touch "$APP_BUNDLE_OUT/Contents/Resources/terminal.icns"
 touch "$APP_BUNDLE_OUT/Contents/Info.plist"

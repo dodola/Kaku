@@ -4,7 +4,9 @@ local wezterm = require 'wezterm'
 
 local config = {}
 
-if wezterm.config_builder then
+-- `config_builder` validates every assignment and is expensive on large configs.
+-- Keep startup fast by default; enable strict validation only when debugging config.
+if os.getenv('KAKU_STRICT_CONFIG') == '1' and wezterm.config_builder then
   config = wezterm.config_builder()
 end
 
@@ -14,13 +16,17 @@ local function basename(path)
   return path:match('([^/]+)$')
 end
 
-local function equal_padding(all)
-  return {
-    left = all,
-    right = all,
-    top = '40px',
-    bottom = '30px',
-  }
+-- URL decode helper for Chinese characters in paths
+-- Converts %E9%9F%B3%E4%B9%90 -> 音乐
+local function url_decode(str)
+  if not str then
+    return str
+  end
+  -- First, handle UTF-8 encoded sequences (%XX%YY%ZZ)
+  local result = str:gsub('%%([0-9A-Fa-f][0-9A-Fa-f])', function(hex)
+    return string.char(tonumber(hex, 16))
+  end)
+  return result
 end
 
 local function padding_matches(current, expected)
@@ -31,7 +37,12 @@ local function padding_matches(current, expected)
     and current.bottom == expected.bottom
 end
 
-local fullscreen_uniform_padding = equal_padding('40px')
+local fullscreen_uniform_padding = {
+  left = '40px',
+  right = '40px',
+  top = '70px',
+  bottom = '30px',
+}
 
 local function update_window_config(window, is_full_screen)
   local overrides = window:get_config_overrides() or {}
@@ -64,6 +75,8 @@ local function extract_path_from_cwd(cwd)
   end
 
   path = path:gsub('^file://[^/]*', ''):gsub('/$', '')
+  -- Decode URL-encoded characters (e.g., %E9%9F%B3%E4%B9%90 -> 音乐)
+  path = url_decode(path)
   return path
 end
 
@@ -112,9 +125,13 @@ wezterm.on('format-tab-title', function(tab, _, _, _, _, max_width)
   }
 end)
 
-wezterm.on('update-right-status', function(window)
+wezterm.on('window-resized', function(window, pane)
   local dims = window:get_dimensions()
   update_window_config(window, dims.is_full_screen)
+end)
+
+wezterm.on('update-right-status', function(window)
+  local dims = window:get_dimensions()
   if not dims.is_full_screen then
     window:set_right_status('')
     return
@@ -141,7 +158,7 @@ end)
 config.font = wezterm.font_with_fallback({
   { family = 'JetBrains Mono', weight = 'Regular' },
   { family = 'PingFang SC', weight = 'Regular' },
-  { family = 'Apple Color Emoji', assume_emoji_presentation = true },
+  'Apple Color Emoji',
 })
 
 config.font_rules = {
@@ -157,19 +174,16 @@ config.font_rules = {
 
 config.bold_brightens_ansi_colors = false
 config.font_size = 17.0
-config.line_height = 1.28
-config.cell_width = 1.02
+config.line_height = 1.30
+config.cell_width = 1.00
 config.harfbuzz_features = { 'calt=0', 'clig=0', 'liga=0' }
 config.use_cap_height_to_scale_fallback_fonts = false
 
 config.freetype_load_target = 'Normal'
--- config.freetype_render_target = 'HorizontalLcd'
 
-config.allow_square_glyphs_to_overflow_width = 'WhenFollowedBySpace'
+config.allow_square_glyphs_to_overflow_width = 'Always'
 config.custom_block_glyphs = true
-
--- config.freetype_load_target = 'Normal'
--- config.freetype_render_target = 'HorizontalLcd'
+config.unicode_version = 14
 
 -- ===== Cursor =====
 config.default_cursor_style = 'BlinkingBar'
@@ -291,7 +305,12 @@ config.colors = {
 }
 
 -- ===== Shell =====
-config.default_prog = { '/bin/zsh', '-l' }
+local user_shell = os.getenv('SHELL')
+if user_shell and #user_shell > 0 then
+  config.default_prog = { user_shell, '-l' }
+else
+  config.default_prog = { '/bin/zsh', '-l' }
+end
 
 -- ===== macOS Specific =====
 -- Keep Left Option as Meta so Alt-based Vim/Neovim keybindings work reliably.
@@ -327,23 +346,28 @@ config.keys = {
     action = wezterm.action.SpawnWindow,
   },
 
-  -- Cmd+W: close current pane (smart)
+  -- Cmd+W: close pane > close tab > hide app
   {
     key = 'w',
     mods = 'CMD',
     action = wezterm.action_callback(function(win, pane)
-      local tab = win:active_tab()
-      if #tab:panes() > 1 then
+      local mux_win = win:mux_window()
+      local tabs = mux_win and mux_win:tabs() or {}
+      local current_tab = pane:tab()
+      local panes = current_tab and current_tab:panes() or {}
+      if #panes > 1 then
         win:perform_action(wezterm.action.CloseCurrentPane { confirm = false }, pane)
-      else
+      elseif #tabs > 1 then
         win:perform_action(wezterm.action.CloseCurrentTab { confirm = false }, pane)
+      else
+        win:perform_action(wezterm.action.HideApplication, pane)
       end
     end),
   },
 
   -- Cmd+Shift+W: close current tab
   {
-    key = 'W',
+    key = 'w',
     mods = 'CMD|SHIFT',
     action = wezterm.action.CloseCurrentTab({ confirm = false }),
   },
@@ -376,15 +400,16 @@ config.keys = {
     action = wezterm.action.HideApplication,
   },
 
-  -- Cmd+Shift+R: reload configuration
-  {
-    key = 'R',
-    mods = 'CMD|SHIFT',
-    action = wezterm.action.ReloadConfiguration,
-  },
+  -- Cmd+Shift+.: reload configuration
   {
     key = '.',
     mods = 'CMD|SHIFT',
+    action = wezterm.action.ReloadConfiguration,
+  },
+  -- Some layouts report Shift+. as mapped:>, keep this as a fallback.
+  {
+    key = 'mapped:>',
+    mods = 'CMD',
     action = wezterm.action.ReloadConfiguration,
   },
 
@@ -604,6 +629,9 @@ config.animation_fps = 60
 config.max_fps = 60
 
 -- ===== Visuals & Splits =====
+-- Split pane gap: gutter = 1 + 2*gap cells, giving ~40px padding on each side
+config.split_pane_gap = 2
+
 -- Inactive panes: No dimming (consistent background)
 config.inactive_pane_hsb = {
   saturation = 1.0,

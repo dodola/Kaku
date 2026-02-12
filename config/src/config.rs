@@ -538,6 +538,13 @@ pub struct Config {
     #[dynamic(default)]
     pub window_padding: WindowPadding,
 
+    /// Number of extra cells of padding added on each side of a split line.
+    /// The split gutter width becomes `1 + 2 * split_pane_gap` cells.
+    /// A value of 2 gives ~40px visual breathing room at typical font sizes,
+    /// matching the outer window padding aesthetic without clipping content.
+    #[dynamic(default)]
+    pub split_pane_gap: u8,
+
     #[dynamic(default)]
     pub window_content_alignment: WindowContentAlignment,
 
@@ -789,7 +796,7 @@ pub struct Config {
     #[dynamic(default = "default_stateless_process_list")]
     pub skip_close_confirmation_for_processes_named: Vec<String>,
 
-    #[dynamic(default = "default_true")]
+    #[dynamic(default = "default_quit_when_all_windows_are_closed")]
     pub quit_when_all_windows_are_closed: bool,
 
     #[dynamic(default = "default_true")]
@@ -1084,12 +1091,13 @@ impl Config {
                 Ok(default_config_with_overrides_applied()?.compute_extra_defaults(None))
             });
 
-        Ok(LoadedConfig {
+        let loaded = LoadedConfig {
             config: Ok(config?),
             file_name: None,
             lua: Some(make_lua_context(Path::new(""))?),
             warnings,
-        })
+        };
+        Ok(loaded)
     }
 
     fn try_load(
@@ -1112,8 +1120,6 @@ impl Config {
 
         let (config, warnings) =
             wezterm_dynamic::Error::capture_warnings(|| -> anyhow::Result<Config> {
-                let cfg: Config;
-
                 let config: mlua::Value = smol::block_on(
                     // Skip a potential BOM that Windows software may have placed in the
                     // file. Note that we can't catch this happening for files that are
@@ -1124,17 +1130,13 @@ impl Config {
                 )?;
                 let config = Config::apply_overrides_to(&lua, config)?;
                 let config = Config::apply_overrides_obj_to(&lua, config, overrides)?;
-                cfg = Config::from_lua(config, &lua).with_context(|| {
+                let cfg = Config::from_lua(config, &lua).with_context(|| {
                     format!(
                         "Error converting lua value returned by script {} to Config struct",
                         p.display()
                     )
                 })?;
                 cfg.check_consistency()?;
-
-                // Compute but discard the key bindings here so that we raise any
-                // problems earlier than we use them.
-                let _ = cfg.key_bindings();
 
                 std::env::set_var("KAKU_CONFIG_FILE", p);
                 if let Some(dir) = p.parent() {
@@ -1143,9 +1145,10 @@ impl Config {
                 Ok(cfg)
             });
         let cfg = config?;
+        let cfg = cfg.compute_extra_defaults(Some(p));
 
         Ok(Some(LoadedConfig {
-            config: Ok(cfg.compute_extra_defaults(Some(p))),
+            config: Ok(cfg),
             file_name: Some(p.to_path_buf()),
             lua: Some(lua),
             warnings,
@@ -1383,9 +1386,18 @@ impl Config {
             ..Default::default()
         });
 
-        // Load any additional color schemes into the color_schemes map
-        cfg.load_color_schemes(&cfg.compute_color_scheme_dirs())
-            .ok();
+        // Only scan color scheme directories from disk when the user
+        // references a scheme not already defined inline.  This avoids
+        // directory enumeration + TOML parsing on every startup for users
+        // who don't use custom .toml color scheme files.
+        let need_disk_schemes = cfg
+            .color_scheme
+            .as_ref()
+            .map_or(false, |name| !cfg.color_schemes.contains_key(name.as_str()));
+        if need_disk_schemes {
+            cfg.load_color_schemes(&cfg.compute_color_scheme_dirs())
+                .ok();
+        }
 
         if let Some(scheme) = cfg.color_scheme.as_ref() {
             match cfg.resolve_color_scheme() {
@@ -1797,7 +1809,7 @@ fn default_gui_startup_args() -> Vec<String> {
 
 // Coupled with term/src/config.rs:TerminalConfiguration::unicode_version
 fn default_unicode_version() -> u8 {
-    9
+    14
 }
 
 fn default_mux_env_remove() -> Vec<String> {
@@ -1851,6 +1863,17 @@ fn default_stateless_process_list() -> Vec<String> {
 
 fn default_status_update_interval() -> u64 {
     1_000
+}
+
+fn default_quit_when_all_windows_are_closed() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        false
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        true
+    }
 }
 
 fn default_alternate_buffer_wheel_scroll_speed() -> u8 {

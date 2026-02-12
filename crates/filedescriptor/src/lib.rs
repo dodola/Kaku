@@ -8,6 +8,7 @@
 //! ## FileDescriptor
 //!
 //! This is a bit of a contrived example, but demonstrates how to avoid
+#![allow(clippy::missing_safety_doc)]
 //! the conditional code that would otherwise be required to deal with
 //! calling `as_raw_fd` and `as_raw_handle`:
 //!
@@ -211,6 +212,7 @@ impl OwnedHandle {
     /// potentially fallible operation.
     /// The returned handle has a separate lifetime from the source, but
     /// references the same object at the kernel level.
+    #[allow(clippy::unit_arg)]
     pub fn try_clone(&self) -> Result<Self> {
         Self::dup_impl(self, self.handle_type)
     }
@@ -222,6 +224,7 @@ impl OwnedHandle {
     /// potentially fallible operation.
     /// The returned handle has a separate lifetime from the source, but
     /// references the same object at the kernel level.
+    #[allow(clippy::unit_arg)]
     pub fn dup<F: AsRawFileDescriptor>(f: &F) -> Result<Self> {
         Self::dup_impl(f, Default::default())
     }

@@ -20,9 +20,8 @@ mod asciicast;
 mod cli;
 mod config_cmd;
 mod init;
+mod reset;
 mod update;
-
-//    let message = "; ❤ 😍🤢\n\x1b[91;mw00t\n\x1b[37;104;m bleet\x1b[0;m.";
 
 #[derive(Debug, Parser)]
 #[command(
@@ -142,6 +141,12 @@ enum SubCommand {
 
     #[command(name = "init", about = "Initialize Kaku shell integration")]
     Init(init::InitCommand),
+
+    #[command(
+        name = "reset",
+        about = "Reset Kaku shell integration and managed defaults"
+    )]
+    Reset(reset::ResetCommand),
 }
 
 use termwiz::escape::osc::{
@@ -359,7 +364,9 @@ impl ImgCatCommand {
 
                     candidates.sort_by(|a, b| (a.0 * a.1).cmp(&(b.0 * b.1)));
 
-                    candidates.pop().unwrap()
+                    // candidates is non-empty because at least one scaling
+                    // direction always satisfies the constraint above.
+                    candidates.pop().expect("at least one candidate fits")
                 } else {
                     (width, height)
                 }
@@ -762,6 +769,7 @@ fn run() -> anyhow::Result<()> {
         SubCommand::Update(cmd) => cmd.run(),
         SubCommand::Config(cmd) => cmd.run(),
         SubCommand::Init(cmd) => cmd.run(),
+        SubCommand::Reset(cmd) => cmd.run(),
     }
 }
 
@@ -793,7 +801,7 @@ fn select_main_menu_command() -> anyhow::Result<SubCommand> {
     println!("  1. config   Open ~/.config/kaku/kaku.lua");
     println!("  2. update   Check and install latest version");
     println!("  3. init     Initialize shell integration");
-    println!("  4. start    Launch Kaku GUI");
+    println!("  4. reset    Remove Kaku shell integration and managed defaults");
     println!("  q. quit");
     println!();
 
@@ -810,7 +818,7 @@ fn select_main_menu_command() -> anyhow::Result<SubCommand> {
             "1" | "config" => return Ok(SubCommand::Config(config_cmd::ConfigCommand::default())),
             "2" | "update" => return Ok(SubCommand::Update(update::UpdateCommand::default())),
             "3" | "init" => return Ok(SubCommand::Init(init::InitCommand::default())),
-            "4" | "start" => return Ok(SubCommand::Start(StartCommand::default())),
+            "4" | "reset" => return Ok(SubCommand::Reset(reset::ResetCommand::default())),
             "q" | "quit" | "exit" => std::process::exit(0),
             _ => {
                 println!("Invalid option. Enter 1, 2, 3, 4, or q.");

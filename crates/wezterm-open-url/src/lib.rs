@@ -47,9 +47,7 @@ pub fn open_with(url: &str, app: &str) {
         cmd.args(&args[1..]);
 
         if let Ok(status) = cmd.status() {
-            if status.success() {
-                return;
-            }
+            if status.success() {}
         }
     });
 }

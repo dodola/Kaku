@@ -184,11 +184,10 @@ impl UserData for GuiWin {
         methods.add_async_method("get_config_overrides", |lua, this, _: ()| async move {
             let (tx, rx) = smol::channel::bounded(1);
             this.window.notify(TermWindowNotif::GetConfigOverrides(tx));
-            let overrides = rx
-                .recv()
-                .await
-                .map_err(|e| anyhow::anyhow!("{:#}", e))
-                .map_err(luaerr)?;
+            let overrides = match rx.recv().await {
+                Ok(overrides) => overrides,
+                Err(_) => wezterm_dynamic::Value::default(),
+            };
 
             dynamic_to_lua_value(lua, overrides)
         });

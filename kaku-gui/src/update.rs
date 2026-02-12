@@ -2,11 +2,10 @@ use anyhow::anyhow;
 use config::{configuration, wezterm_version};
 use http_req::request::{HttpVersion, Request};
 use http_req::uri::Uri;
-use mux::connui::ConnectionUI;
 use serde::*;
+use std::cmp::Ordering as CmpOrdering;
 use std::convert::TryFrom;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
 use std::time::Duration;
 use wezterm_toast_notification::*;
 
@@ -55,10 +54,6 @@ pub fn get_nightly_release_info() -> anyhow::Result<Release> {
     get_github_release_info("https://api.github.com/repos/wezterm/wezterm/releases/tags/nightly")
 }
 
-lazy_static::lazy_static! {
-    static ref UPDATER_WINDOW: Mutex<Option<ConnectionUI>> = Mutex::new(None);
-}
-
 fn is_newer(latest: &str, current: &str) -> bool {
     let latest = latest.trim_start_matches('v');
     let current = current.trim_start_matches('v');
@@ -69,20 +64,45 @@ fn is_newer(latest: &str, current: &str) -> bool {
         return false;
     }
 
-    // Basic SemVer-ish string comparison
-    // TODO: Use proper SemVer parsing if strictly needed
-    latest > current
+    match compare_versions(latest, current) {
+        Some(CmpOrdering::Greater) => true,
+        Some(_) => false,
+        None => latest != current,
+    }
 }
 
-fn schedule_set_banner_from_release_info(_latest: &Release) {
-    // Banner scheduling disabled
+fn compare_versions(left: &str, right: &str) -> Option<CmpOrdering> {
+    let left = parse_version_numbers(left)?;
+    let right = parse_version_numbers(right)?;
+    let max_len = left.len().max(right.len());
+    for idx in 0..max_len {
+        let l = left.get(idx).copied().unwrap_or(0);
+        let r = right.get(idx).copied().unwrap_or(0);
+        match l.cmp(&r) {
+            CmpOrdering::Equal => {}
+            non_eq => return Some(non_eq),
+        }
+    }
+    Some(CmpOrdering::Equal)
 }
 
-pub fn load_last_release_info_and_set_banner() {
-    // Banner UI is currently disabled; avoid unnecessary startup I/O and JSON parsing.
+fn parse_version_numbers(version: &str) -> Option<Vec<u64>> {
+    let cleaned = version.trim().trim_start_matches(['v', 'V']);
+    let mut out = Vec::new();
+    for part in cleaned.split('.') {
+        let digits: String = part.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if digits.is_empty() {
+            return None;
+        }
+        let value = digits.parse::<u64>().ok()?;
+        out.push(value);
+    }
+    if out.is_empty() {
+        return None;
+    }
+    Some(out)
 }
 
-/// Returns true if the provided socket path is dead.
 fn update_checker() {
     // Compute how long we should sleep for;
     // if we've never checked, give it a few seconds after the first
@@ -119,7 +139,6 @@ fn update_checker() {
 
         if configuration().check_for_updates {
             if let Ok(latest) = get_latest_release_info() {
-                schedule_set_banner_from_release_info(&latest);
                 let current = wezterm_version();
                 if is_newer(&latest.tag_name, current) || force_ui {
                     log::info!(
@@ -168,5 +187,18 @@ pub fn start_update_checker() {
             .name("update_checker".into())
             .spawn(update_checker)
             .expect("failed to spawn update checker thread");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_newer;
+
+    #[test]
+    fn semver_numeric_comparison() {
+        assert!(is_newer("0.1.10", "0.1.9"));
+        assert!(!is_newer("0.2.0", "0.11.0"));
+        assert!(!is_newer("0.1.1", "0.1.1"));
+        assert!(is_newer("v0.1.2", "0.1.1"));
     }
 }

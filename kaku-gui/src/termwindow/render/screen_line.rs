@@ -262,16 +262,20 @@ impl crate::TermWindow {
                 // Draw one per cell, otherwise curly underlines
                 // stretch across the whole span
                 for i in 0..cluster_width {
-                    let mut quad = layers.allocate(0).context("layers.allocate(0)")?;
-                    let x = gl_x
-                        + params.left_pixel_x
-                        + if params.use_pixel_positioning {
-                            item.x_pos
-                        } else {
-                            phys(cluster.first_cell_idx + i, num_cols, direction) as f32
-                                * cell_width
-                        };
+                    let rel_x = if params.use_pixel_positioning {
+                        item.x_pos
+                    } else {
+                        phys(cluster.first_cell_idx + i, num_cols, direction) as f32 * cell_width
+                    };
 
+                    // Clip underlines to the visible content area, matching
+                    // the background intersection logic above.
+                    if rel_x + cell_width > params.pixel_width {
+                        break;
+                    }
+
+                    let x = gl_x + params.left_pixel_x + rel_x;
+                    let mut quad = layers.allocate(0).context("layers.allocate(0)")?;
                     quad.set_position(x, pos_y, x + cell_width, pos_y + cell_height);
                     quad.set_hsv(hsv);
                     quad.set_has_color(false);

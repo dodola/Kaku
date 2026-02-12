@@ -1319,7 +1319,7 @@ impl Mux {
             .resolve_spawn_tab_domain(current_pane_id, &domain)
             .context("resolve_spawn_tab_domain")?;
 
-        let window_builder;
+        let mut window_builder;
         let term_config;
 
         let (window_id, size) = if let Some(window_id) = window_id {
@@ -1340,6 +1340,9 @@ impl Mux {
         } else {
             term_config = None;
             window_builder = self.new_empty_window(Some(workspace_for_new_window), window_position);
+            // Notify immediately so GUI can materialize the window while
+            // the shell/domain spawn work is still in progress.
+            window_builder.notify();
             (*window_builder, size)
         };
 

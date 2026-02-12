@@ -11,9 +11,47 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  fmt:
+    name: Format Check
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (nightly)
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt
+
+      - name: Check formatting
+        run: cargo +nightly fmt -p kaku -p kaku-gui -p mux -p wezterm-term -p termwiz -p config -p wezterm-font -- --check
+
+  test:
+    name: Unit Tests
+    runs-on: macos-latest
+    needs: fmt
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Run tests
+        run: |
+          cargo nextest run
+          cargo nextest run -p wezterm-escape-parser
+
   check:
     name: Cargo Check
     runs-on: macos-latest
+    needs: fmt
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -30,6 +68,7 @@ jobs:
   universal-build:
     name: Universal Build Validation
     runs-on: macos-latest
+    needs: [check, test]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -57,8 +96,8 @@ jobs:
             target/aarch64-apple-darwin/release/kaku-gui \
             target/x86_64-apple-darwin/release/kaku-gui
 
-          lipo -verify_arch arm64 x86_64 target/universal/release/kaku
-          lipo -verify_arch arm64 x86_64 target/universal/release/kaku-gui
+          lipo target/universal/release/kaku -verify_arch arm64 x86_64
+          lipo target/universal/release/kaku-gui -verify_arch arm64 x86_64
 
           lipo -info target/universal/release/kaku
           lipo -info target/universal/release/kaku-gui

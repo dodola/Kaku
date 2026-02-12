@@ -43,7 +43,7 @@ use raw_window_handle::{
     HasWindowHandle, RawDisplayHandle, RawWindowHandle, WindowHandle,
 };
 use std::any::Any;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::ffi::{c_void, CStr};
 use std::path::PathBuf;
 use std::ptr::NonNull;
@@ -54,10 +54,19 @@ use std::time::Instant;
 use wezterm_font::FontConfiguration;
 use wezterm_input_types::{is_ascii_control, IntegratedTitleButtonStyle, KeyboardLedStatus};
 
+static APP_TERMINATING: AtomicBool = AtomicBool::new(false);
+
+// Flag set by app-layer padding/tab-bar handler via request_drag_move().
+// mouse_down() checks this flag and calls performWindowDragWithEvent: synchronously,
+// matching the approach used by Ghostty for reliable drag + double-click coexistence.
+thread_local! {
+    static PENDING_DRAG_MOVE: Cell<bool> = Cell::new(false);
+}
+
 #[allow(non_upper_case_globals)]
 const NSViewLayerContentsPlacementTopLeft: NSInteger = 11;
 #[allow(non_upper_case_globals)]
-const NSViewLayerContentsRedrawDuringViewResize: NSInteger = 2;
+const NSViewLayerContentsRedrawBeforeViewResize: NSInteger = 3;
 
 #[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {
@@ -433,30 +442,12 @@ fn set_window_position(window: *mut Object, coords: ScreenPoint) {
 const MIN_RESTORE_WIDTH: usize = 200;
 const MIN_RESTORE_HEIGHT: usize = 120;
 
-fn point_in_rect(pt: NSPoint, rect: NSRect) -> bool {
-    let rect: euclid::Rect<f64, ()> =
-        euclid::rect(rect.origin.x, rect.origin.y, rect.size.width, rect.size.height);
-    rect.contains(euclid::point2(pt.x, pt.y))
-}
-
-fn point_in_any_screen(pt: NSPoint) -> bool {
-    unsafe {
-        let screens = NSScreen::screens(nil);
-        for idx in 0..screens.count() {
-            let screen = screens.objectAtIndex(idx);
-            let frame = NSScreen::frame(screen);
-            if point_in_rect(pt, frame) {
-                return true;
-            }
-        }
-    }
-    false
+thread_local! {
+    static LAST_CLOSED_WINDOW_POSITION: RefCell<Option<ScreenPoint>> = RefCell::new(None);
 }
 
 #[derive(Debug, Clone, Copy)]
-struct PersistedWindowGeometry {
-    x: isize,
-    y: isize,
+struct PersistedWindowSize {
     width: usize,
     height: usize,
 }
@@ -469,15 +460,15 @@ fn config_dir_file(name: &str) -> PathBuf {
         .join(name)
 }
 
-fn persisted_window_geometry_file() -> PathBuf {
+fn persisted_window_size_file() -> PathBuf {
     config_dir_file(".kaku_window_geometry")
 }
 
-fn legacy_persisted_window_position_file() -> PathBuf {
-    config_dir_file(".kaku_window_position")
-}
+fn window_position(window: *mut Object) -> Option<ScreenPoint> {
+    if window.is_null() {
+        return None;
+    }
 
-fn window_geometry(window: *mut Object) -> PersistedWindowGeometry {
     unsafe {
         let frame = NSWindow::frame(window);
         let content_frame = NSWindow::contentRectForFrameRect_(window, frame);
@@ -485,130 +476,122 @@ fn window_geometry(window: *mut Object) -> PersistedWindowGeometry {
             content_frame.origin.x,
             content_frame.origin.y + content_frame.size.height,
         );
-        let pos = cartesian_to_screen_point(top_left);
-        PersistedWindowGeometry {
-            x: pos.x,
-            y: pos.y,
+        Some(cartesian_to_screen_point(top_left))
+    }
+}
+
+fn remember_last_closed_window_position(window: *mut Object) {
+    if window.is_null() {
+        return;
+    }
+
+    let style_mask = unsafe { NSWindow::styleMask(window) };
+    if style_mask.contains(NSWindowStyleMask::NSFullScreenWindowMask) {
+        return;
+    }
+
+    if let Some(pos) = window_position(window) {
+        LAST_CLOSED_WINDOW_POSITION.with(|last_pos| {
+            last_pos.borrow_mut().replace(pos);
+        });
+    }
+}
+
+fn last_closed_window_position() -> Option<ScreenPoint> {
+    LAST_CLOSED_WINDOW_POSITION.with(|last_pos| *last_pos.borrow())
+}
+
+fn window_size(window: *mut Object) -> PersistedWindowSize {
+    unsafe {
+        let frame = NSWindow::frame(window);
+        let content_frame = NSWindow::contentRectForFrameRect_(window, frame);
+        PersistedWindowSize {
             width: content_frame.size.width.round().max(1.0) as usize,
             height: content_frame.size.height.round().max(1.0) as usize,
         }
     }
 }
 
-fn parse_persisted_window_geometry(s: &str) -> Option<PersistedWindowGeometry> {
-    let mut parts = s.trim().split(',').map(str::trim);
-    let x = parts.next()?.parse::<isize>().ok()?;
-    let y = parts.next()?.parse::<isize>().ok()?;
-    let width = parts.next()?.parse::<usize>().ok()?;
-    let height = parts.next()?.parse::<usize>().ok()?;
-    if parts.next().is_some() {
-        return None;
+fn parse_persisted_window_size(s: &str) -> Option<PersistedWindowSize> {
+    let parts: Vec<_> = s.trim().split(',').map(str::trim).collect();
+    match parts.as_slice() {
+        // New format: width,height
+        [width, height] => Some(PersistedWindowSize {
+            width: width.parse::<usize>().ok()?,
+            height: height.parse::<usize>().ok()?,
+        }),
+        // Backward compatibility: x,y,width,height (ignore x,y)
+        [_, _, width, height] => Some(PersistedWindowSize {
+            width: width.parse::<usize>().ok()?,
+            height: height.parse::<usize>().ok()?,
+        }),
+        _ => None,
     }
-    Some(PersistedWindowGeometry {
-        x,
-        y,
-        width,
-        height,
-    })
 }
 
-fn load_persisted_window_geometry() -> Option<PersistedWindowGeometry> {
-    let file_name = persisted_window_geometry_file();
-    if let Ok(contents) = std::fs::read_to_string(&file_name) {
-        match parse_persisted_window_geometry(&contents) {
-            Some(geometry) => return Some(geometry),
-            None => log::warn!(
-                "Failed to parse persisted window geometry from {:?}: {:?}",
-                file_name,
-                contents.trim()
-            ),
-        }
-    }
-
-    // Compatibility for builds that only persisted x,y.
-    let legacy_file = legacy_persisted_window_position_file();
-    let coords = std::fs::read_to_string(legacy_file).ok()?;
-    let (x, y) = coords.trim().split_once(',')?;
-    let x = x.trim().parse::<isize>().ok()?;
-    let y = y.trim().parse::<isize>().ok()?;
-    Some(PersistedWindowGeometry {
-        x,
-        y,
-        width: 0,
-        height: 0,
-    })
+fn load_persisted_window_size() -> Option<PersistedWindowSize> {
+    let file_name = persisted_window_size_file();
+    let contents = std::fs::read_to_string(&file_name).ok()?;
+    parse_persisted_window_size(&contents)
 }
 
-/// Set when `applicationShouldTerminate` confirms quit, so that individual
-/// `window_will_close` callbacks know not to overwrite the geometry that
-/// `on_app_terminating` already persisted from the key window.
-pub(crate) static TERMINATING: AtomicBool = AtomicBool::new(false);
-
-/// Called from the app delegate when the user confirms quit.
-/// Persists the key (frontmost) window's geometry as a reliable safety net
-/// before the event loop is stopped.
-pub(crate) fn on_app_terminating() {
-    let mut persisted = false;
-    let key_window: id = unsafe { msg_send![NSApplication::sharedApplication(nil), keyWindow] };
-    if !key_window.is_null() {
-        persist_window_geometry(key_window);
-        persisted = true;
+fn persist_window_size(window: *mut Object) -> bool {
+    if window.is_null() {
+        return false;
     }
 
-    if !persisted {
-        let main_window: id = unsafe { msg_send![NSApplication::sharedApplication(nil), mainWindow] };
-        if !main_window.is_null() {
-            persist_window_geometry(main_window);
-            persisted = true;
-        }
-    }
-
-    if !persisted {
-        if let Some(conn) = Connection::get() {
-            if let Some(window_inner) = conn.windows.borrow().values().next() {
-                persist_window_geometry(*window_inner.borrow().window);
-            }
-        }
-    }
-
-    TERMINATING.store(true, Ordering::Relaxed);
-}
-
-fn persist_window_geometry(window: *mut Object) {
     let style_mask = unsafe { NSWindow::styleMask(window) };
     if style_mask.contains(NSWindowStyleMask::NSFullScreenWindowMask) {
-        return;
+        return false;
     }
 
-    let file_name = persisted_window_geometry_file();
-    let geometry = window_geometry(window);
+    let file_name = persisted_window_size_file();
+    let size = window_size(window);
     if let Some(parent) = file_name.parent() {
-        if let Err(err) = config::create_user_owned_dirs(parent) {
-            log::warn!(
-                "Failed to create config directory for persisted window geometry {:?}: {:#}",
-                parent,
-                err
-            );
-            return;
+        if config::create_user_owned_dirs(parent).is_err() {
+            return false;
         }
     }
 
-    if let Err(err) = std::fs::write(
-        &file_name,
-        format!(
-            "{},{},{},{}\n",
-            geometry.x, geometry.y, geometry.width, geometry.height
-        ),
-    ) {
-        log::warn!(
-            "Failed to persist window geometry ({}, {}, {}, {}) to {:?}: {:#}",
-            geometry.x,
-            geometry.y,
-            geometry.width,
-            geometry.height,
-            file_name,
-            err
-        );
+    std::fs::write(&file_name, format!("{},{}\n", size.width, size.height)).is_ok()
+}
+
+/// Called from the app delegate when the user confirms quit.
+/// Persists size from tracked terminal windows before the event loop stops.
+pub(crate) fn on_app_terminating() {
+    APP_TERMINATING.store(true, Ordering::Relaxed);
+    if let Some(conn) = Connection::get() {
+        let mut windows = vec![];
+        for window_inner in conn.windows.borrow().values() {
+            let window = *window_inner.borrow().window;
+            if !window.is_null() {
+                windows.push(window);
+            }
+        }
+
+        let preferred = windows.iter().copied().find(|window| unsafe {
+            let is_key: BOOL = msg_send![*window, isKeyWindow];
+            is_key != NO
+        });
+        let preferred = preferred.or_else(|| {
+            windows.iter().copied().find(|window| unsafe {
+                let is_main: BOOL = msg_send![*window, isMainWindow];
+                is_main != NO
+            })
+        });
+        let preferred = preferred.or_else(|| {
+            if windows.len() == 1 {
+                windows.first().copied()
+            } else {
+                None
+            }
+        });
+
+        if let Some(window) = preferred {
+            if persist_window_size(window) {
+                return;
+            }
+        }
     }
 }
 
@@ -647,20 +630,18 @@ impl Window {
             (Some(x), Some(y)) => Some(ScreenPoint::new(x as isize, y as isize)),
             _ => None,
         };
-        // Only restore persisted geometry for the very first window; subsequent
-        // windows should use the normal cascade so they don't all stack on top
-        // of each other.
         let is_first_window = conn.windows.borrow().is_empty();
-        let persisted_geometry = if explicit_initial_pos.is_none() && is_first_window {
-            load_persisted_window_geometry()
+        let remembered_initial_pos = if explicit_initial_pos.is_none() && is_first_window {
+            last_closed_window_position()
         } else {
             None
         };
-        let persisted_initial_pos = persisted_geometry.map(|g| ScreenPoint::new(g.x, g.y));
-        if let Some(geometry) = persisted_geometry {
-            if geometry.width >= MIN_RESTORE_WIDTH && geometry.height >= MIN_RESTORE_HEIGHT {
-                width = geometry.width;
-                height = geometry.height;
+        if explicit_initial_pos.is_none() && is_first_window {
+            if let Some(size) = load_persisted_window_size() {
+                if size.width >= MIN_RESTORE_WIDTH && size.height >= MIN_RESTORE_HEIGHT {
+                    width = size.width;
+                    height = size.height;
+                }
             }
         }
 
@@ -700,6 +681,7 @@ impl Window {
                 ime_state: ImeDisposition::None,
                 ime_last_event: None,
                 live_resizing: false,
+                in_fullscreen_transition: false,
                 ime_text: String::new(),
             }));
 
@@ -733,52 +715,17 @@ impl Window {
             // its titlebar, opaque to this fixed degree.
             // window.setAlphaValue_(0.4);
 
-            // Window positioning: the first window opens up in the center of
-            // the screen.  Subsequent windows will be offset from the position
-            // of the prior window at the time it was created.  It's not a
-            // perfect algorithm by any means, and doesn't take in account
-            // windows moving and closing since the last creation, but it is
-            // better than creating them all centered which is what we used
-            // to do here.
-            thread_local! {
-                static LAST_POSITION: RefCell<Option<NSPoint>> = RefCell::new(None);
+            if let Some(pos) = explicit_initial_pos {
+                // Put it where they asked it to be.
+                set_window_position(*window, pos);
+            } else if let Some(pos) = remembered_initial_pos {
+                // Re-open after closing last window (Cmd+W) should preserve
+                // recent position without adding cold-start file I/O.
+                set_window_position(*window, pos);
+            } else {
+                // No position memory/cascade: keep startup deterministic.
+                window.center();
             }
-
-            let frame = NSWindow::frame(*window);
-            let active_screen = NSScreen::mainScreen(nil);
-            let active_screen_frame = NSScreen::frame(active_screen);
-
-
-
-            LAST_POSITION.with(|last_pos| {
-                if let Some(pos) = explicit_initial_pos {
-                    // Put it where they asked it to be, without influencing
-                    // future positioning info
-                    set_window_position(*window, pos);
-                    return;
-                }
-                if let Some(pos) = persisted_initial_pos {
-                    if point_in_any_screen(screen_point_to_cartesian(pos)) {
-                        set_window_position(*window, pos);
-                        return;
-                    }
-                }
-                let pos = last_pos.borrow_mut().take();
-                let next_pos = match pos {
-                    Some(pos) if point_in_rect(pos, active_screen_frame) => {
-                        // Only continue the cascade if the prior point is
-                        // still within the currently active screen
-                        window.cascadeTopLeftFromPoint_(pos)
-                    }
-                    _ => {
-                        // Otherwise, position as if it is the first time
-                        // we're displaying on this screen
-                        window.center();
-                        window.cascadeTopLeftFromPoint_(frame.origin)
-                    }
-                };
-                last_pos.borrow_mut().replace(next_pos);
-            });
 
             window.setTitle_(*nsstring(&name));
             window.setAcceptsMouseMovedEvents_(YES);
@@ -791,18 +738,20 @@ impl Window {
                 setLayerContentsPlacement: NSViewLayerContentsPlacementTopLeft
             ];
 
-            CGSSetWindowBackgroundBlurRadius(
-                CGSMainConnectionID(),
-                window.windowNumber(),
-                config.macos_window_background_blur,
-            );
+            if config.macos_window_background_blur > 0 {
+                CGSSetWindowBackgroundBlurRadius(
+                    CGSMainConnectionID(),
+                    window.windowNumber(),
+                    config.macos_window_background_blur,
+                );
+            }
             window.setContentView_(*view);
             window.setDelegate_(*view);
 
             view.setWantsLayer(YES);
             let () = msg_send![
                 *view,
-                setLayerContentsRedrawPolicy: NSViewLayerContentsRedrawDuringViewResize
+                setLayerContentsRedrawPolicy: NSViewLayerContentsRedrawBeforeViewResize
             ];
 
             // register for drag and drop operations.
@@ -1000,6 +949,13 @@ impl WindowOps for Window {
             }
             Ok(())
         });
+    }
+
+    fn request_drag_move(&self) {
+        // Set flag for mouse_down() to call performWindowDragWithEvent: synchronously.
+        // The previous async path via spawn_into_main_thread caused the modal drag
+        // session to swallow the second mouseDown, preventing double-click detection.
+        PENDING_DRAG_MOVE.with(|f| f.set(true));
     }
 
     fn set_window_position(&self, coords: ScreenPoint) {
@@ -1767,6 +1723,7 @@ struct Inner {
 
     /// Whether we're in live resize
     live_resizing: bool,
+    in_fullscreen_transition: bool,
 
     ime_text: String,
 }
@@ -2468,6 +2425,14 @@ impl WindowView {
         NO
     }
 
+    // Return NO so mouseDown: is always delivered to our view.
+    // With YES, macOS intercepts mouseDown for native window dragging,
+    // which prevents our double-click detection from ever running.
+    // We handle window dragging ourselves via performWindowDragWithEvent:.
+    extern "C" fn mouse_down_can_move_window(_this: &Object, _sel: Sel) -> BOOL {
+        NO
+    }
+
     // Don't use Cocoa native window tabbing
     extern "C" fn allow_automatic_tabbing(_this: &Object, _sel: Sel) -> BOOL {
         NO
@@ -2498,16 +2463,12 @@ impl WindowView {
     extern "C" fn window_will_close(this: &mut Object, _sel: Sel, _id: id) {
         if let Some(this) = Self::get_this(this) {
             let conn = Connection::get().unwrap();
-            // During app termination, on_app_terminating() already persisted the
-            // key window's geometry. Skip here to avoid overwriting it with a
-            // random window's data as AppKit closes each window in turn.
-            // For individual window closes, only persist for the last window so
-            // we consistently restore the user's most recent session.
-            if !TERMINATING.load(Ordering::Relaxed) && conn.windows.borrow().len() == 1 {
+            if !APP_TERMINATING.load(Ordering::Relaxed) {
                 if let Some(window) = this.inner.borrow().window.as_ref() {
                     let window = window.load();
                     if !window.is_null() {
-                        persist_window_geometry(*window);
+                        remember_last_closed_window_position(*window);
+                        let _ = persist_window_size(*window);
                     }
                 }
             }
@@ -2528,6 +2489,7 @@ impl WindowView {
         let mouse_buttons;
         let modifiers;
         let screen_coords;
+        let click_count;
         unsafe {
             let point = NSView::convertPoint_fromView_(view, nsevent.locationInWindow(), nil);
             let rect = NSRect::new(NSPoint::new(0., 0.), NSSize::new(point.x, point.y));
@@ -2541,6 +2503,7 @@ impl WindowView {
             mouse_buttons = decode_mouse_buttons(NSEvent::pressedMouseButtons(nsevent));
             modifiers = key_modifiers(nsevent.modifierFlags());
             screen_coords = NSEvent::mouseLocation(nsevent);
+            click_count = nsevent.clickCount().max(0) as u32;
         }
         let event = MouseEvent {
             kind,
@@ -2548,6 +2511,7 @@ impl WindowView {
             screen_coords: cartesian_to_screen_point(screen_coords),
             mouse_buttons,
             modifiers,
+            click_count,
         };
 
         if let Some(myself) = Self::get_this(this) {
@@ -2561,7 +2525,24 @@ impl WindowView {
     }
 
     extern "C" fn mouse_down(this: &mut Object, _sel: Sel, nsevent: id) {
+        PENDING_DRAG_MOVE.with(|f| f.set(false));
+
+        // Dispatch to app layer. For title/tab-bar clicks, the handler will either
+        // call request_drag_move() (single click) or zoom the window (double click).
         Self::mouse_common(this, nsevent, MouseEventKind::Press(MousePress::Left));
+
+        // If the app requested a drag, start it synchronously with the original event.
+        // This mirrors Ghostty's approach: performDrag runs its modal tracking loop
+        // here, ensuring the second mouseDown (double-click) is delivered afterwards.
+        if PENDING_DRAG_MOVE.with(|f| f.get()) {
+            PENDING_DRAG_MOVE.with(|f| f.set(false));
+            unsafe {
+                let window: id = msg_send![this as id, window];
+                if window != nil {
+                    let () = msg_send![window, performWindowDragWithEvent: nsevent];
+                }
+            }
+        }
     }
     extern "C" fn right_mouse_up(this: &mut Object, _sel: Sel, nsevent: id) {
         Self::mouse_common(this, nsevent, MouseEventKind::Release(MousePress::Right));
@@ -3109,14 +3090,54 @@ impl WindowView {
         }
     }
 
+    extern "C" fn will_enter_fullscreen(this: &mut Object, _sel: Sel, _notification: id) {
+        if let Some(this) = Self::get_this(this) {
+            this.inner.borrow_mut().in_fullscreen_transition = true;
+        }
+    }
+
+    extern "C" fn did_enter_fullscreen(this: &mut Object, _sel: Sel, _notification: id) {
+        if let Some(this_ref) = Self::get_this(this) {
+            this_ref.inner.borrow_mut().in_fullscreen_transition = false;
+        }
+        Self::did_resize(this, _sel, _notification);
+    }
+
+    extern "C" fn will_exit_fullscreen(this: &mut Object, _sel: Sel, _notification: id) {
+        if let Some(this) = Self::get_this(this) {
+            this.inner.borrow_mut().in_fullscreen_transition = true;
+        }
+    }
+
+    extern "C" fn did_exit_fullscreen(this: &mut Object, _sel: Sel, _notification: id) {
+        if let Some(this_ref) = Self::get_this(this) {
+            this_ref.inner.borrow_mut().in_fullscreen_transition = false;
+        }
+        Self::did_resize(this, _sel, _notification);
+    }
+
     extern "C" fn did_end_live_resize(this: &mut Object, _sel: Sel, _notification: id) {
         if let Some(this) = Self::get_this(this) {
             let mut inner = this.inner.borrow_mut();
             inner.live_resizing = false;
+            if !APP_TERMINATING.load(Ordering::Relaxed) {
+                if let Some(window) = inner.window.as_ref() {
+                    let window = window.load();
+                    if !window.is_null() {
+                        let _ = persist_window_size(*window);
+                    }
+                }
+            }
         }
     }
 
     extern "C" fn did_resize(this: &mut Object, _sel: Sel, _notification: id) {
+        let in_fullscreen_transition = if let Some(this) = Self::get_this(this) {
+            this.inner.borrow().in_fullscreen_transition
+        } else {
+            false
+        };
+
         if let Some(this) = Self::get_this(this) {
             let inner = this.inner.borrow_mut();
 
@@ -3145,7 +3166,10 @@ impl WindowView {
                     style_mask.contains(NSWindowStyleMask::NSFullScreenWindowMask)
                 });
 
-            let live_resizing = inner.live_resizing;
+            // During fullscreen transition, treat as live resizing to allow
+            // smooth font scaling updates as the window animates, preventing
+            // the text from appearing too large/small during the transition.
+            let live_resizing = inner.live_resizing || in_fullscreen_transition;
 
             // Note: isZoomed can falsely return YES in situations such as
             // the current screen changing. We cannot detect that case here.
@@ -3198,6 +3222,15 @@ impl WindowView {
                 window_state: screen_state | level_state,
                 live_resizing,
             });
+
+            if !live_resizing && !APP_TERMINATING.load(Ordering::Relaxed) {
+                if let Some(window) = inner.window.as_ref() {
+                    let window = window.load();
+                    if !window.is_null() {
+                        let _ = persist_window_size(*window);
+                    }
+                }
+            }
         }
     }
 
@@ -3464,6 +3497,11 @@ impl WindowView {
             );
 
             cls.add_method(
+                sel!(mouseDownCanMoveWindow),
+                Self::mouse_down_can_move_window as extern "C" fn(&Object, Sel) -> BOOL,
+            );
+
+            cls.add_method(
                 sel!(allowsAutomaticWindowTabbing),
                 Self::allow_automatic_tabbing as extern "C" fn(&Object, Sel) -> BOOL,
             );
@@ -3475,6 +3513,22 @@ impl WindowView {
             cls.add_method(
                 sel!(windowDidEndLiveResize:),
                 Self::did_end_live_resize as extern "C" fn(&mut Object, Sel, id),
+            );
+            cls.add_method(
+                sel!(windowWillEnterFullScreen:),
+                Self::will_enter_fullscreen as extern "C" fn(&mut Object, Sel, id),
+            );
+            cls.add_method(
+                sel!(windowDidEnterFullScreen:),
+                Self::did_enter_fullscreen as extern "C" fn(&mut Object, Sel, id),
+            );
+            cls.add_method(
+                sel!(windowWillExitFullScreen:),
+                Self::will_exit_fullscreen as extern "C" fn(&mut Object, Sel, id),
+            );
+            cls.add_method(
+                sel!(windowDidExitFullScreen:),
+                Self::did_exit_fullscreen as extern "C" fn(&mut Object, Sel, id),
             );
             cls.add_method(
                 sel!(windowDidResize:),

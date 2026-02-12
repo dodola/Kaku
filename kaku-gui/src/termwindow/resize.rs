@@ -55,7 +55,7 @@ impl super::TermWindow {
         }
 
         if let Some(webgpu) = self.webgpu.as_mut() {
-            webgpu.resize(dimensions, live_resizing);
+            webgpu.resize(dimensions);
         }
 
         // For simple, user-interactive resizes where the dpi doesn't change,
@@ -572,7 +572,11 @@ fn persist_current_font_size(config: &ConfigHandle, font_scale: f64) {
     if (font_scale - 1.0).abs() < 0.0001 {
         if let Err(err) = std::fs::remove_file(&file_name) {
             if err.kind() != std::io::ErrorKind::NotFound {
-                log::warn!("Failed to clear persisted font size at {:?}: {:#}", file_name, err);
+                log::warn!(
+                    "Failed to clear persisted font size at {:?}: {:#}",
+                    file_name,
+                    err
+                );
             }
         }
         return;

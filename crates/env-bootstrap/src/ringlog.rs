@@ -239,26 +239,53 @@ pub fn get_entries() -> Vec<Entry> {
 }
 
 fn prune_old_logs() {
-    let one_week = std::time::Duration::from_secs(86400 * 7);
-    if let Ok(dir) = std::fs::read_dir(&*config::RUNTIME_DIR) {
-        for entry in dir {
-            if let Ok(entry) = entry {
-                if let Some(name) = entry.file_name().to_str() {
-                    if name.contains("-log-") {
-                        if let Ok(meta) = entry.metadata() {
-                            if let Ok(modified) = meta.modified() {
-                                if let Ok(elapsed) = modified.elapsed() {
-                                    if elapsed > one_week {
-                                        let _ = std::fs::remove_file(entry.path());
-                                    }
-                                }
-                            }
+    // Move all RUNTIME_DIR cleanup to a background thread so it never
+    // blocks cold-start.  The directory can accumulate hundreds of stale
+    // log / socket / agent files across restarts.
+    let runtime_dir = config::RUNTIME_DIR.clone();
+    std::thread::Builder::new()
+        .name("prune-runtime-dir".into())
+        .spawn(move || {
+            let one_week = std::time::Duration::from_secs(86400 * 7);
+            let one_day = std::time::Duration::from_secs(86400);
+            let my_pid = format!("{}", unsafe { libc::getpid() });
+
+            if let Ok(dir) = std::fs::read_dir(&runtime_dir) {
+                for entry in dir {
+                    let Ok(entry) = entry else { continue };
+                    let Some(name) = entry.file_name().to_str().map(String::from) else {
+                        continue;
+                    };
+
+                    let Ok(meta) = entry.metadata() else { continue };
+                    let age = meta
+                        .modified()
+                        .ok()
+                        .and_then(|m| m.elapsed().ok())
+                        .unwrap_or_default();
+
+                    // Old log files (> 7 days)
+                    if name.contains("-log-") && age > one_week {
+                        let _ = std::fs::remove_file(entry.path());
+                        continue;
+                    }
+
+                    // Stale gui-sock files (> 1 day, not ours)
+                    if name.starts_with("gui-sock-") && age > one_day {
+                        if !name.ends_with(&my_pid) {
+                            let _ = std::fs::remove_file(entry.path());
                         }
+                        continue;
+                    }
+
+                    // Stale agent files (> 1 day)
+                    if name.starts_with("agent.") && age > one_day {
+                        let _ = std::fs::remove_file(entry.path());
                     }
                 }
             }
-        }
-    }
+        })
+        .ok();
 }
 
 fn setup_pretty() -> (LevelFilter, Logger) {

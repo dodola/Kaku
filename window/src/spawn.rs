@@ -236,7 +236,14 @@ impl SpawnQueue {
     }
 
     fn run_impl(&self) -> bool {
-        if let Some(func) = self.pop_func() {
+        // Process a burst each wakeup so chained high-priority GUI work
+        // (SpawnWindow -> reconcile -> new_window) doesn't get stretched
+        // across multiple runloop turns.
+        const MAX_FUNCS_PER_WAKE: usize = 64;
+        for _ in 0..MAX_FUNCS_PER_WAKE {
+            let Some(func) = self.pop_func() else {
+                break;
+            };
             func();
         }
         self.has_any_queued()

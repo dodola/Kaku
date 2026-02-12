@@ -27,6 +27,42 @@ fi
 
 SETUP_SCRIPT="$RESOURCES_DIR/setup_zsh.sh"
 
+detect_login_shell() {
+	if [[ -n "${SHELL:-}" && -x "${SHELL:-}" ]]; then
+		printf '%s\n' "$SHELL"
+		return
+	fi
+
+	local current_user resolved_shell passwd_entry
+	current_user="${USER:-}"
+	if [[ -z "$current_user" ]]; then
+		current_user="$(id -un 2>/dev/null || true)"
+	fi
+
+	if [[ -n "$current_user" ]] && command -v dscl &>/dev/null; then
+		resolved_shell="$(dscl . -read "/Users/$current_user" UserShell 2>/dev/null | awk '/UserShell:/ { print $2 }')"
+		if [[ -n "$resolved_shell" && -x "$resolved_shell" ]]; then
+			printf '%s\n' "$resolved_shell"
+			return
+		fi
+	fi
+
+	if [[ -n "$current_user" ]] && command -v getent &>/dev/null; then
+		passwd_entry="$(getent passwd "$current_user" 2>/dev/null || true)"
+		resolved_shell="${passwd_entry##*:}"
+		if [[ -n "$resolved_shell" && -x "$resolved_shell" ]]; then
+			printf '%s\n' "$resolved_shell"
+			return
+		fi
+	fi
+
+	if [[ -x "/bin/zsh" ]]; then
+		printf '%s\n' "/bin/zsh"
+	else
+		printf '%s\n' "/bin/sh"
+	fi
+}
+
 # Clear screen
 clear
 
@@ -107,95 +143,53 @@ else
 fi
 
 mkdir -p "$HOME/.config/kaku"
-VERSION_FILE="$HOME/.config/kaku/.kaku_config_version"
-USER_CONFIG_VERSION=0
-if [[ -f "$VERSION_FILE" ]]; then
-	RAW_VERSION="$(cat "$VERSION_FILE" 2>/dev/null || true)"
-	if [[ "$RAW_VERSION" =~ ^[0-9]+$ ]]; then
-		USER_CONFIG_VERSION="$RAW_VERSION"
+
+resolve_kaku_cli() {
+	local candidates=(
+		"$RESOURCES_DIR/../MacOS/kaku"
+		"/Applications/Kaku.app/Contents/MacOS/kaku"
+		"$HOME/Applications/Kaku.app/Contents/MacOS/kaku"
+	)
+
+	local candidate
+	for candidate in "${candidates[@]}"; do
+		if [[ -x "$candidate" ]]; then
+			printf '%s\n' "$candidate"
+			return 0
+		fi
+	done
+
+	if command -v kaku >/dev/null 2>&1; then
+		command -v kaku
+		return 0
 	fi
-fi
+
+	return 1
+}
+
+ensure_user_config_via_cli() {
+	local kaku_lua_dest="$HOME/.config/kaku/kaku.lua"
+	if [[ -f "$kaku_lua_dest" ]]; then
+		echo "Keeping existing user config: $kaku_lua_dest"
+		return 0
+	fi
+
+	local kaku_bin
+	if ! kaku_bin="$(resolve_kaku_cli)"; then
+		echo "Warning: kaku CLI not found, skipped config initialization."
+		return 0
+	fi
+
+	if "$kaku_bin" config --ensure-only >/dev/null 2>&1; then
+		echo "Created minimal user config: $kaku_lua_dest"
+	else
+		echo "Warning: failed to initialize user config via '$kaku_bin config --ensure-only'."
+	fi
+}
 
 # Process Kaku Theme
 if [[ "$INSTALL_THEME" == "true" ]]; then
-	KAKU_LUA_SRC="$RESOURCES_DIR/kaku.lua"
-	KAKU_LUA_DEST="$HOME/.config/kaku/kaku.lua"
-
-		if [[ -f "$KAKU_LUA_SRC" ]]; then
-			if [[ -f "$KAKU_LUA_DEST" && "$USER_CONFIG_VERSION" -ne 1 ]]; then
-				echo "Detected existing custom kaku.lua, skipping automatic overwrite."
-				echo "To apply theme manually, review: $KAKU_LUA_SRC"
-			else
-				if [[ -f "$KAKU_LUA_DEST" ]]; then
-					BACKUP_FILE="$KAKU_LUA_DEST.kaku-backup-$(date +%s)"
-					cp "$KAKU_LUA_DEST" "$BACKUP_FILE"
-					echo "Detected v1 config, backup created at: $BACKUP_FILE"
-				fi
-
-				echo "Installing Kaku theme..."
-				cp "$KAKU_LUA_SRC" "$KAKU_LUA_DEST"
-
-				# Inject Kaku theme before the return statement
-				# We use a temporary file to construct the new content
-				TMP_FILE=$(mktemp)
-
-				# Read all lines except the last one (return config)
-				sed '$d' "$KAKU_LUA_DEST" >"$TMP_FILE"
-
-				# Append Kaku theme config
-				cat <<EOF >>"$TMP_FILE"
-
--- ===== Kaku Theme =====
-config.colors = {
-  foreground = '#d4d4d4',
-  background = '#1e1e1e',
-  cursor_bg = '#569cd6',
-  cursor_fg = '#1e1e1e',
-  cursor_border = '#569cd6',
-  selection_bg = '#264f78',
-  selection_fg = '#d4d4d4',
-  ansi = {'#000000', '#cd3131', '#0dbc79', '#e5e510', '#2472c8', '#bc3fbc', '#11a8cd', '#e5e5e5'},
-  brights = {'#666666', '#f14c4c', '#23d18b', '#f5f543', '#3b8eea', '#d670d6', '#29b8db', '#e5e5e5'},
-  tab_bar = {
-    background = '#1e1e1e',
-    active_tab = {
-      bg_color = '#1e1e1e',
-      fg_color = '#569cd6',
-      intensity = 'Bold',
-    },
-    inactive_tab = {
-      bg_color = '#2d2d2d',
-      fg_color = '#858585',
-    },
-    inactive_tab_hover = {
-      bg_color = '#2d2d2d',
-      fg_color = '#d4d4d4',
-    },
-    new_tab = {
-      bg_color = '#1e1e1e',
-      fg_color = '#858585',
-    },
-    new_tab_hover = {
-      bg_color = '#2d2d2d',
-      fg_color = '#d4d4d4',
-    },
-  },
-}
-config.window_frame = {
-  active_titlebar_bg = '#1e1e1e',
-  inactive_titlebar_bg = '#1e1e1e',
-  button_bg = '#1e1e1e',
-  button_fg = '#cccccc',
-}
-
-return config
-EOF
-				mv "$TMP_FILE" "$KAKU_LUA_DEST"
-				echo "Kaku theme applied!"
-			fi
-		else
-			echo "Warning: Could not find kaku.lua source at $KAKU_LUA_SRC"
-		fi
+	ensure_user_config_via_cli
 fi
 
 # Process Delta Installation
@@ -217,5 +211,6 @@ echo -e "\n\033[1;32m❤️ Kaku environment is ready! Enjoy coding.\033[0m"
 # Persist explicitly here so successful first-run/upgrade paths are recorded.
 persist_config_version
 
-# Replace current process with zsh to enter the shell
-exec /bin/zsh -l
+# Replace current process with the user's login shell
+TARGET_SHELL="$(detect_login_shell)"
+exec "$TARGET_SHELL" -l

@@ -56,6 +56,7 @@ use smol::Timer;
 use std::cell::{RefCell, RefMut};
 use std::collections::{HashMap, LinkedList};
 use std::ops::Add;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -63,6 +64,7 @@ use std::time::{Duration, Instant};
 use termwiz::hyperlink::Hyperlink;
 use termwiz::surface::SequenceNo;
 use wezterm_dynamic::Value;
+use wezterm_font::units::PixelLength;
 use wezterm_font::FontConfiguration;
 use wezterm_term::color::ColorPalette;
 use wezterm_term::input::LastMouseClick;
@@ -91,6 +93,116 @@ const ATLAS_SIZE: usize = 128;
 lazy_static::lazy_static! {
     static ref WINDOW_CLASS: Mutex<String> = Mutex::new(wezterm_gui_subcommands::DEFAULT_WINDOW_CLASS.to_owned());
     static ref POSITION: Mutex<Option<GuiPosition>> = Mutex::new(None);
+    static ref RENDER_METRICS_CACHE: Mutex<Option<RenderMetricsCacheEntry>> = Mutex::new(None);
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct RenderMetricsCacheKey {
+    dpi: usize,
+    persisted_font_scale_bits: u64,
+    font_size_bits: u64,
+    line_height_bits: u64,
+    cell_width_bits: u64,
+}
+
+#[derive(Copy, Clone, Debug)]
+struct RenderMetricsCacheEntry {
+    key: RenderMetricsCacheKey,
+    metrics: RenderMetrics,
+}
+
+#[derive(Copy, Clone, Debug, serde::Serialize, serde::Deserialize)]
+struct RenderMetricsDiskEntry {
+    key: RenderMetricsCacheKey,
+    descender: f64,
+    descender_row: isize,
+    descender_plus_two: isize,
+    underline_height: isize,
+    strike_row: isize,
+    cell_width: isize,
+    cell_height: isize,
+}
+
+fn render_metrics_cache_file() -> PathBuf {
+    config::DATA_DIR.join("render_metrics_cache_v1.json")
+}
+
+fn load_render_metrics_from_disk(key: RenderMetricsCacheKey) -> Option<RenderMetrics> {
+    let data = std::fs::read(render_metrics_cache_file()).ok()?;
+    let entry: RenderMetricsDiskEntry = serde_json::from_slice(&data).ok()?;
+    if entry.key != key {
+        return None;
+    }
+
+    if !entry.descender.is_finite()
+        || entry.cell_width <= 0
+        || entry.cell_height <= 0
+        || entry.underline_height <= 0
+    {
+        return None;
+    }
+
+    Some(RenderMetrics {
+        descender: PixelLength::new(entry.descender),
+        descender_row: entry.descender_row,
+        descender_plus_two: entry.descender_plus_two,
+        underline_height: entry.underline_height,
+        strike_row: entry.strike_row,
+        cell_size: Size::new(entry.cell_width, entry.cell_height),
+    })
+}
+
+fn persist_render_metrics_to_disk(key: RenderMetricsCacheKey, metrics: RenderMetrics) {
+    let file_name = render_metrics_cache_file();
+    if let Some(parent) = file_name.parent() {
+        config::create_user_owned_dirs(parent).ok();
+    }
+
+    let entry = RenderMetricsDiskEntry {
+        key,
+        descender: metrics.descender.get(),
+        descender_row: metrics.descender_row,
+        descender_plus_two: metrics.descender_plus_two,
+        underline_height: metrics.underline_height,
+        strike_row: metrics.strike_row,
+        cell_width: metrics.cell_size.width,
+        cell_height: metrics.cell_size.height,
+    };
+
+    if let Ok(data) = serde_json::to_vec(&entry) {
+        std::fs::write(file_name, data).ok();
+    }
+}
+
+fn render_metrics_from_cache_or_compute(
+    fonts: &Rc<FontConfiguration>,
+    config: &ConfigHandle,
+    dpi: usize,
+    persisted_font_scale: Option<f64>,
+) -> anyhow::Result<(RenderMetrics, bool)> {
+    let key = RenderMetricsCacheKey {
+        dpi,
+        persisted_font_scale_bits: persisted_font_scale.unwrap_or(1.0).to_bits(),
+        font_size_bits: config.font_size.to_bits(),
+        line_height_bits: config.line_height.to_bits(),
+        cell_width_bits: config.cell_width.to_bits(),
+    };
+
+    if let Some(entry) = *RENDER_METRICS_CACHE.lock().unwrap() {
+        if entry.key == key {
+            return Ok((entry.metrics, true));
+        }
+    }
+
+    if let Some(metrics) = load_render_metrics_from_disk(key) {
+        *RENDER_METRICS_CACHE.lock().unwrap() = Some(RenderMetricsCacheEntry { key, metrics });
+        return Ok((metrics, true));
+    }
+
+    let metrics = RenderMetrics::new(fonts)?;
+    *RENDER_METRICS_CACHE.lock().unwrap() = Some(RenderMetricsCacheEntry { key, metrics });
+    persist_render_metrics_to_disk(key, metrics);
+    Ok((metrics, false))
 }
 
 pub const ICON_DATA: &'static [u8] = include_bytes!("../../../assets/logo.png");
@@ -446,8 +558,6 @@ pub struct TermWindow {
 
     ui_items: Vec<UIItem>,
     dragging: Option<(UIItem, MouseEvent)>,
-    /// Tracks state during a live split-drag so we can defer PTY
-    /// notification until the drag ends.
     split_drag_state: Option<SplitDragState>,
 
     modal: RefCell<Option<Rc<dyn Modal>>>,
@@ -595,7 +705,8 @@ impl TermWindow {
         let config = configuration();
         let dpi = config.dpi.unwrap_or_else(|| ::window::default_dpi()) as usize;
         let fontconfig = Rc::new(FontConfiguration::new(Some(config.clone()), dpi)?);
-        if let Some(font_scale) = resize::load_persisted_font_scale(&config) {
+        let persisted_font_scale = resize::load_persisted_font_scale(&config);
+        if let Some(font_scale) = persisted_font_scale {
             fontconfig.change_scaling(font_scale, dpi);
         }
 
@@ -610,7 +721,8 @@ impl TermWindow {
         let physical_rows = size.rows as usize;
         let physical_cols = size.cols as usize;
 
-        let render_metrics = RenderMetrics::new(&fontconfig)?;
+        let (render_metrics, _metrics_cache_hit) =
+            render_metrics_from_cache_or_compute(&fontconfig, &config, dpi, persisted_font_scale)?;
         log::trace!("using render_metrics {:#?}", render_metrics);
 
         // Initially we have only a single tab, so take that into account
@@ -917,12 +1029,15 @@ impl TermWindow {
         log::trace!("{event:?}");
         match event {
             WindowEvent::Destroyed => {
+                self.window.take();
+                self.event_states.clear();
                 // Ensure that we cancel any overlays we had running, so
                 // that the mux can empty out, otherwise the mux keeps
                 // the TermWindow alive via the frontend even though
                 // the window is gone and we'll linger forever.
                 // <https://github.com/wezterm/wezterm/issues/3522>
                 self.clear_all_overlays();
+                front_end().forget_known_window(window);
                 Ok(false)
             }
             WindowEvent::CloseRequested => {
@@ -1100,14 +1215,14 @@ impl TermWindow {
     }
 
     fn do_paint_webgpu(&mut self) -> anyhow::Result<bool> {
-        self.webgpu.as_mut().unwrap().resize(self.dimensions, false);
+        self.webgpu.as_mut().unwrap().resize(self.dimensions);
         match self.do_paint_webgpu_impl() {
             Ok(ok) => Ok(ok),
             Err(err) => {
                 match err.downcast_ref::<wgpu::SurfaceError>() {
                     Some(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
                         log::warn!("wgpu surface lost/outdated, reconfiguring and retrying");
-                        self.webgpu.as_mut().unwrap().resize(self.dimensions, false);
+                        self.webgpu.as_mut().unwrap().resize(self.dimensions);
                         return self.do_paint_webgpu_impl();
                     }
                     Some(wgpu::SurfaceError::Timeout) => {
@@ -2104,11 +2219,23 @@ impl TermWindow {
             };
 
             // If the number of tabs changed and caused the tab bar to
-            // hide/show, then we'll need to resize things.  It is simplest
-            // to piggy back on the config reloading code for that, so that
-            // is what we're doing.
+            // hide/show, then we'll need to resize things. We only update
+            // what's needed for tab bar visibility to avoid the stutter
+            // caused by a full config_was_reloaded() call.
             if show_tab_bar != self.show_tab_bar {
-                self.config_was_reloaded();
+                let owned_window = window.clone();
+                self.show_tab_bar = show_tab_bar;
+                // Pre-warm the title font so the first paint of the tab bar
+                // does not block on lazy font loading (which causes a stutter
+                // specifically at the 1↔2 tab boundary).
+                if show_tab_bar && self.config.use_fancy_tab_bar {
+                    let _ = self.fonts.title_font();
+                }
+                self.fancy_tab_bar.take();
+                self.invalidate_fancy_tab_bar();
+                let dimensions = self.dimensions;
+                self.apply_dimensions(&dimensions, None, &owned_window);
+                owned_window.invalidate();
             }
         }
         self.schedule_next_status_update();
@@ -2789,7 +2916,14 @@ impl TermWindow {
             CloseCurrentTab { confirm } => self.close_current_tab(*confirm),
             CloseCurrentPane { confirm } => self.close_current_pane(*confirm),
             Nop | DisableDefaultAssignment => {}
-            ReloadConfiguration => config::reload(),
+            ReloadConfiguration => {
+                config::reload();
+                crate::frontend::refresh_fast_config_snapshot();
+                wezterm_toast_notification::persistent_toast_notification(
+                    "Kaku",
+                    "Configuration reloaded",
+                );
+            }
             MoveTab(n) => self.move_tab(*n)?,
             MoveTabRelative(n) => self.move_tab_relative(*n)?,
             ScrollByPage(n) => self.scroll_by_page(**n, pane)?,
@@ -2819,7 +2953,6 @@ impl TermWindow {
             QuitApplication => {
                 let mux = Mux::get();
                 let config = &self.config;
-                log::info!("QuitApplication over here (window)");
 
                 match config.window_close_confirmation {
                     WindowCloseConfirmation::NeverPrompt => {
@@ -2856,8 +2989,12 @@ impl TermWindow {
                 self.do_open_link_at_mouse_cursor(pane);
             }
             EmitEvent(name) => {
-                if name == "check-for-update" {
-                    crate::frontend::check_for_updates();
+                if name == "update-kaku" || name == "run-kaku-update" {
+                    pane.writer().write_all(b"kaku update\n")?;
+                } else if name == "run-kaku-cli" {
+                    pane.writer().write_all(b"kaku\n")?;
+                } else if name == "open-kaku-config" {
+                    crate::frontend::open_kaku_config();
                 } else {
                     self.emit_window_event(name, None);
                 }

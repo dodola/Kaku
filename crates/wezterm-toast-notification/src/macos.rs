@@ -1,4 +1,6 @@
 #![cfg(target_os = "macos")]
+#![allow(clippy::borrow_interior_mutable_const)]
+#![allow(clippy::declare_interior_mutable_const)]
 use crate::ToastNotification;
 use block2::{Block, RcBlock};
 use objc2::rc::Retained;
@@ -94,7 +96,7 @@ impl Drop for NotifDelegate {
 }
 
 const CENTER: LazyLock<Retained<UNUserNotificationCenter>> =
-    LazyLock::new(|| UNUserNotificationCenter::currentNotificationCenter());
+    LazyLock::new(UNUserNotificationCenter::currentNotificationCenter);
 
 pub fn initialize() {
     static INIT: Once = Once::new();
@@ -158,7 +160,7 @@ pub fn show_notif(toast: ToastNotification) -> Result<(), Box<dyn std::error::Er
 
         if let Some(url) = &toast.url {
             let info =
-                NSDictionary::from_slices(&[ns_string!("url")], &[&*NSString::from_str(&url)]);
+                NSDictionary::from_slices(&[ns_string!("url")], &[&*NSString::from_str(url)]);
             notif.setUserInfo(
                 info.downcast_ref::<NSDictionary>()
                     .expect("is NSDictionary"),

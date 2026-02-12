@@ -20,13 +20,15 @@ const CLS_NAME: &str = "KakuAppDelegate";
 thread_local! {
     static LAST_OPEN_UNTITLED_SPAWN: RefCell<Option<Instant>> = RefCell::new(None);
 }
+// macOS can emit applicationOpenUntitledFile twice while no window has
+// materialized yet; keep a wider debounce to avoid duplicate SpawnWindow work.
+const OPEN_UNTITLED_SPAWN_DEBOUNCE: Duration = Duration::from_millis(1200);
 
 extern "C" fn application_should_terminate(
     _self: &mut Object,
     _sel: Sel,
     _app: *mut Object,
 ) -> u64 {
-    log::debug!("application termination requested");
     unsafe {
         match config::configuration().window_close_confirmation {
             WindowCloseConfirmation::NeverPrompt => terminate_now(),
@@ -47,7 +49,6 @@ extern "C" fn application_should_terminate(
                 #[allow(non_upper_case_globals, dead_code)]
                 const NSModalResponseOK: NSInteger = 1001;
                 let result: NSInteger = msg_send![alert, runModal];
-                log::info!("alert result is {result}");
 
                 if result == NSModalResponseCancel {
                     NSApplicationTerminateReply::NSTerminateCancel as u64
@@ -57,6 +58,16 @@ extern "C" fn application_should_terminate(
             }
         }
     }
+}
+
+extern "C" fn application_should_terminate_after_last_window_closed(
+    _self: &mut Object,
+    _sel: Sel,
+    _app: *mut Object,
+) -> BOOL {
+    // Keep app process alive on macOS after the last window closes,
+    // so Dock reopen can create a new window without cold-start.
+    NO
 }
 
 fn terminate_now() -> u64 {
@@ -91,7 +102,6 @@ extern "C" fn application_open_untitled_file(
     _app: *mut Object,
 ) -> BOOL {
     let launched: BOOL = unsafe { *this.get_ivar("launched") };
-    log::debug!("application_open_untitled_file launched={launched}");
     if let Some(conn) = Connection::get() {
         if launched == YES {
             let existing_window = {
@@ -99,14 +109,18 @@ extern "C" fn application_open_untitled_file(
                 windows.values().next().cloned()
             };
             if let Some(window) = existing_window {
+                LAST_OPEN_UNTITLED_SPAWN.with(|last| {
+                    last.borrow_mut().take();
+                });
                 window.borrow_mut().focus();
             } else {
                 let should_spawn = LAST_OPEN_UNTITLED_SPAWN.with(|last| {
                     let now = Instant::now();
                     let mut last = last.borrow_mut();
-                    let too_soon = last.map_or(false, |prior| {
-                        now.duration_since(prior) < Duration::from_millis(800)
-                    });
+                    let elapsed = last.map(|prior| now.duration_since(prior));
+                    let too_soon = elapsed
+                        .map(|duration| duration < OPEN_UNTITLED_SPAWN_DEBOUNCE)
+                        .unwrap_or(false);
                     if too_soon {
                         false
                     } else {
@@ -139,6 +153,14 @@ extern "C" fn kaku_perform_key_assignment(_self: &mut Object, _sel: Sel, menu_it
             }
         }
         None => {}
+    }
+}
+
+extern "C" fn show_settings_window(_self: &mut Object, _sel: Sel, _sender: *mut Object) {
+    if let Some(conn) = Connection::get() {
+        conn.dispatch_app_event(ApplicationEvent::PerformKeyAssignment(
+            KeyAssignment::EmitEvent("open-kaku-config".to_string()),
+        ));
     }
 }
 
@@ -185,6 +207,11 @@ fn get_class() -> &'static Class {
                 application_should_terminate as extern "C" fn(&mut Object, Sel, *mut Object) -> u64,
             );
             cls.add_method(
+                sel!(applicationShouldTerminateAfterLastWindowClosed:),
+                application_should_terminate_after_last_window_closed
+                    as extern "C" fn(&mut Object, Sel, *mut Object) -> BOOL,
+            );
+            cls.add_method(
                 sel!(applicationWillFinishLaunching:),
                 application_will_finish_launching as extern "C" fn(&mut Object, Sel, *mut Object),
             );
@@ -204,6 +231,16 @@ fn get_class() -> &'static Class {
             cls.add_method(
                 sel!(kakuPerformKeyAssignment:),
                 kaku_perform_key_assignment as extern "C" fn(&mut Object, Sel, *mut Object),
+            );
+            // macOS may route "Settings..." through one of these standard selectors
+            // instead of our custom menu-item selector.
+            cls.add_method(
+                sel!(showSettingsWindow:),
+                show_settings_window as extern "C" fn(&mut Object, Sel, *mut Object),
+            );
+            cls.add_method(
+                sel!(showPreferencesWindow:),
+                show_settings_window as extern "C" fn(&mut Object, Sel, *mut Object),
             );
             cls.add_method(
                 sel!(applicationOpenUntitledFile:),

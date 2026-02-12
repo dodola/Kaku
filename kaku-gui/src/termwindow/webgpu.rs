@@ -35,7 +35,6 @@ pub struct WebGpuState {
     pub texture_nearest_sampler: wgpu::Sampler,
     pub texture_linear_sampler: wgpu::Sampler,
     pub handle: RawHandlePair,
-    supports_mailbox: bool,
 }
 
 pub struct RawHandlePair {
@@ -319,7 +318,6 @@ impl WebGpuState {
         log::trace!("caps: {caps:?}");
         let downlevel_caps = adapter.get_downlevel_capabilities();
         log::trace!("downlevel_caps: {downlevel_caps:?}");
-        let supports_mailbox = caps.present_modes.contains(&wgpu::PresentMode::Mailbox);
 
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
@@ -508,7 +506,6 @@ impl WebGpuState {
             texture_bind_group_layout,
             texture_nearest_sampler,
             texture_linear_sampler,
-            supports_mailbox,
         })
     }
 
@@ -531,53 +528,19 @@ impl WebGpuState {
     }
 
     #[allow(unused_mut)]
-    pub fn resize(&self, mut dims: Dimensions, live_resizing: bool) {
-        // During a live resize, the Dimensions that we're processing may be
-        // lagging behind the true client size. We have to take the very latest value
-        // from the window or else the underlying driver will raise an error about
-        // the mismatch, so we need to sneakily read through the handle
-        match self.handle.window {
-            #[cfg(windows)]
-            RawWindowHandle::Win32(h) => {
-                let mut rect = unsafe { std::mem::zeroed() };
-                unsafe { winapi::um::winuser::GetClientRect(h.hwnd.get() as _, &mut rect) };
-                dims.pixel_width = (rect.right - rect.left) as usize;
-                dims.pixel_height = (rect.bottom - rect.top) as usize;
-            }
-            #[cfg(target_os = "macos")]
-            RawWindowHandle::AppKit(h) => {
-                use cocoa::appkit::NSView;
-                let ns_view = h.ns_view.as_ptr() as cocoa::base::id;
-                let frame = unsafe { NSView::frame(ns_view) };
-                let backing_frame = unsafe { NSView::convertRectToBacking(ns_view, frame) };
-                dims.pixel_width = backing_frame.size.width as usize;
-                dims.pixel_height = backing_frame.size.height as usize;
-            }
-            _ => {}
-        }
-
+    pub fn resize(&self, dims: Dimensions) {
         let dims_unchanged = dims == *self.dimensions.borrow();
         if !dims_unchanged {
             *self.dimensions.borrow_mut() = dims;
         }
 
-        let desired_present_mode = if live_resizing && self.supports_mailbox {
-            wgpu::PresentMode::Mailbox
-        } else {
-            wgpu::PresentMode::Fifo
-        };
-
         let mut config = self.config.borrow_mut();
-        let present_mode_changed = config.present_mode != desired_present_mode;
-        if dims_unchanged && !present_mode_changed {
+        if dims_unchanged {
             return;
         }
 
-        if !dims_unchanged {
-            config.width = dims.pixel_width as u32;
-            config.height = dims.pixel_height as u32;
-        }
-        config.present_mode = desired_present_mode;
+        config.width = dims.pixel_width as u32;
+        config.height = dims.pixel_height as u32;
 
         if config.width > 0 && config.height > 0 {
             // Avoid reconfiguring with a 0 sized surface, as webgpu will

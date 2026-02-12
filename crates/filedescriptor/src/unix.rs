@@ -200,9 +200,7 @@ impl OwnedHandle {
         }
     }
 
-    pub(crate) fn probe_handle_type(_handle: RawFileDescriptor) -> HandleType {
-        ()
-    }
+    pub(crate) fn probe_handle_type(_handle: RawFileDescriptor) -> HandleType {}
 }
 
 impl std::io::Read for FileDescriptor {
@@ -503,7 +501,10 @@ mod macos {
 
         pub fn contains(&mut self, fd: RawFd) -> bool {
             check_fd(fd).unwrap();
-            unsafe { FD_ISSET(fd, &mut self.set) }
+            #[allow(clippy::unnecessary_mut_passed)]
+            unsafe {
+                FD_ISSET(fd, &mut self.set)
+            }
         }
     }
 

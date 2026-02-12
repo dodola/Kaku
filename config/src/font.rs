@@ -607,7 +607,12 @@ impl TextStyle {
         // Add macOS CJK fallbacks so existing user configs that only list
         // one CJK family still have broad Han glyph coverage.
         #[cfg(target_os = "macos")]
-        for family in ["PingFang SC", "PingFang TC", "PingFang HK", "Hiragino Sans GB"] {
+        for family in [
+            "PingFang SC",
+            "PingFang TC",
+            "PingFang HK",
+            "Hiragino Sans GB",
+        ] {
             let fallback = FontAttributes::new_fallback(family);
             if !font.iter().any(|f| *f == fallback) {
                 font.push(fallback);

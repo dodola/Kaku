@@ -4,12 +4,21 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[derive(Debug, Parser, Clone, Default)]
-pub struct ConfigCommand {}
+pub struct ConfigCommand {
+    /// Ensure ~/.config/kaku/kaku.lua exists, but do not open it.
+    #[arg(long)]
+    ensure_only: bool,
+}
 
 impl ConfigCommand {
     pub fn run(&self) -> anyhow::Result<()> {
         let config_path = resolve_user_config_path();
         ensure_config_exists(&config_path)?;
+        if self.ensure_only {
+            println!("Ensured config: {}", config_path.display());
+            return Ok(());
+        }
+
         open_config(&config_path)?;
         println!("Opened config: {}", config_path.display());
         Ok(())
@@ -34,48 +43,94 @@ fn ensure_config_exists(config_path: &Path) -> anyhow::Result<()> {
         .ok_or_else(|| anyhow!("invalid config path: {}", config_path.display()))?;
     config::create_user_owned_dirs(parent).context("create config directory")?;
 
-    if let Some(template) = find_template_config() {
-        std::fs::copy(&template, config_path)
-            .with_context(|| format!("copy template config from {}", template.display()))?;
-        return Ok(());
-    }
-
-    let fallback = "local wezterm = require 'wezterm'\n\nlocal config = wezterm.config_builder()\n\nreturn config\n";
-    std::fs::write(config_path, fallback).context("write default config file")?;
+    std::fs::write(config_path, minimal_user_config_template())
+        .context("write minimal user config file")?;
     Ok(())
 }
 
-fn find_template_config() -> Option<PathBuf> {
-    let mut candidates = Vec::new();
+fn minimal_user_config_template() -> &'static str {
+    r#"local wezterm = require 'wezterm'
 
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(contents_dir) = exe.parent().and_then(|p| p.parent()) {
-            candidates.push(contents_dir.join("Resources").join("kaku.lua"));
-        }
-    }
+local function resolve_bundled_config()
+  local resource_dir = wezterm.executable_dir:gsub('MacOS/?$', 'Resources')
+  local bundled = resource_dir .. '/kaku.lua'
+  local f = io.open(bundled, 'r')
+  if f then
+    f:close()
+    return bundled
+  end
 
-    candidates.push(PathBuf::from("/Applications/Kaku.app/Contents/Resources/kaku.lua"));
-    candidates.push(
-        config::HOME_DIR
-            .join("Applications")
-            .join("Kaku.app")
-            .join("Contents")
-            .join("Resources")
-            .join("kaku.lua"),
-    );
+  local app_bundled = '/Applications/Kaku.app/Contents/Resources/kaku.lua'
+  f = io.open(app_bundled, 'r')
+  if f then
+    f:close()
+    return app_bundled
+  end
 
-    if let Ok(cwd) = std::env::current_dir() {
-        candidates.push(
-            cwd.join("assets")
-                .join("macos")
-                .join("Kaku.app")
-                .join("Contents")
-                .join("Resources")
-                .join("kaku.lua"),
-        );
-    }
+  local home = os.getenv('HOME') or ''
+  local home_bundled = home .. '/Applications/Kaku.app/Contents/Resources/kaku.lua'
+  f = io.open(home_bundled, 'r')
+  if f then
+    f:close()
+    return home_bundled
+  end
 
-    candidates.into_iter().find(|p| p.exists())
+  local dev_bundled = wezterm.executable_dir .. '/../../assets/macos/Kaku.app/Contents/Resources/kaku.lua'
+  f = io.open(dev_bundled, 'r')
+  if f then
+    f:close()
+    return dev_bundled
+  end
+
+  return nil
+end
+
+local config = {}
+local bundled = resolve_bundled_config()
+
+if bundled then
+  local ok, loaded = pcall(dofile, bundled)
+  if ok and type(loaded) == 'table' then
+    config = loaded
+  else
+    wezterm.log_error('Kaku: failed to load bundled defaults from ' .. bundled)
+  end
+else
+  wezterm.log_error('Kaku: bundled defaults not found')
+end
+
+-- User overrides:
+-- Kaku intentionally keeps WezTerm-compatible Lua API names
+-- for maximum compatibility, so `wezterm.*` here is expected.
+--
+-- 1) Font family and size
+-- config.font = wezterm.font('JetBrains Mono')
+-- config.font_size = 16.0
+--
+-- 2) Color scheme
+-- config.color_scheme = 'Builtin Solarized Dark'
+--
+-- 3) Window size and padding
+-- config.initial_cols = 120
+-- config.initial_rows = 30
+-- config.window_padding = { left = '24px', right = '24px', top = '40px', bottom = '20px' }
+--
+-- 4) Default shell/program
+-- config.default_prog = { '/bin/zsh', '-l' }
+--
+-- 5) Cursor and scrollback
+-- config.default_cursor_style = 'SteadyBar'
+-- config.scrollback_lines = 20000
+--
+-- 6) Add or override a key binding
+-- table.insert(config.keys, {
+--   key = 'Enter',
+--   mods = 'CMD|SHIFT',
+--   action = wezterm.action.TogglePaneZoomState,
+-- })
+
+return config
+"#
 }
 
 fn open_config(config_path: &Path) -> anyhow::Result<()> {

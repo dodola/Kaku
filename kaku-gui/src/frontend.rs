@@ -15,8 +15,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use wezterm_term::{Alert, ClipboardSelection};
 use wezterm_toast_notification::*;
 
@@ -35,12 +34,25 @@ impl Drop for GuiFrontEnd {
     }
 }
 
-static UPDATE_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+lazy_static::lazy_static! {
+    static ref FAST_CONFIG_SNAPSHOT: Mutex<Option<config::ConfigHandle>> = Mutex::new(None);
+}
 
-pub fn check_for_updates() {
-    if UPDATE_IN_PROGRESS.swap(true, Ordering::SeqCst) {
-        return;
+fn fast_config_snapshot() -> config::ConfigHandle {
+    if let Some(cfg) = FAST_CONFIG_SNAPSHOT.lock().unwrap().as_ref().cloned() {
+        return cfg;
     }
+    let cfg = config::configuration();
+    FAST_CONFIG_SNAPSHOT.lock().unwrap().replace(cfg.clone());
+    cfg
+}
+
+pub(crate) fn refresh_fast_config_snapshot() {
+    let cfg = config::configuration();
+    FAST_CONFIG_SNAPSHOT.lock().unwrap().replace(cfg);
+}
+
+pub fn open_kaku_config() {
     std::thread::spawn(move || {
         let result = (|| -> anyhow::Result<()> {
             let current_exe = std::env::current_exe().context("resolve executable path")?;
@@ -53,57 +65,53 @@ pub fn check_for_updates() {
                 anyhow::bail!("could not find kaku binary at {}", kaku_bin.display());
             }
 
-            let target_app = current_exe
-                .parent()
-                .and_then(|p| p.parent())
-                .and_then(|p| p.parent())
-                .ok_or_else(|| anyhow::anyhow!("failed to locate Kaku.app from executable path"))?;
-
-            let mut child = Command::new(&kaku_bin)
-                .arg("update")
-                .env("KAKU_UPDATE_TARGET_APP", target_app)
+            let ensure_status = Command::new(&kaku_bin)
+                .arg("config")
+                .arg("--ensure-only")
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
-                .spawn()
+                .status()
                 .with_context(|| format!("failed to launch {}", kaku_bin.display()))?;
-
-            // Wait for kaku update to finish so UPDATE_IN_PROGRESS stays true
-            // for the full duration of the update, not just the spawn call.
-            let status = child.wait().context("failed to wait for kaku update")?;
-            if !status.success() {
+            if !ensure_status.success() {
                 anyhow::bail!(
-                    "kaku update exited with status {}",
-                    status.code().unwrap_or(-1)
+                    "kaku config --ensure-only exited with status {}",
+                    ensure_status.code().unwrap_or(-1)
                 );
+            }
+
+            let home = std::env::var("HOME").context("resolve HOME for config path")?;
+            let config_path = format!("{home}/.config/kaku/kaku.lua");
+            let quoted_config_path =
+                shlex::try_quote(&config_path).context("quote config path for shell open")?;
+            let open_script = format!(
+                "if command -v code >/dev/null 2>&1; then code -g {0}; else /usr/bin/open {0}; fi",
+                quoted_config_path
+            );
+            let open_status = Command::new("/bin/sh")
+                .arg("-lc")
+                .arg(open_script)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .context("open kaku.lua in editor")?;
+            if !open_status.success() {
+                anyhow::bail!("failed to open {}", config_path);
             }
 
             Ok(())
         })();
 
-        UPDATE_IN_PROGRESS.store(false, Ordering::SeqCst);
-        match result {
-            Ok(()) => {
-                promise::spawn::spawn_into_main_thread(async move {
-                    if let Some(conn) = Connection::get() {
-                        conn.alert(
-                            "Check for Updates",
-                            "Checking for updates in background. Kaku will relaunch if a new version is found.",
-                        );
-                    }
-                })
-                .detach();
-            }
-            Err(err) => {
-                let msg = format!("Failed to start update: {:#}", err);
-                log::error!("{}", msg);
-                promise::spawn::spawn_into_main_thread(async move {
-                    if let Some(conn) = Connection::get() {
-                        conn.alert("Check for Updates", &msg);
-                    }
-                })
-                .detach();
-            }
+        if let Err(err) = result {
+            let msg = format!("Failed to open settings: {:#}", err);
+            log::error!("{}", msg);
+            promise::spawn::spawn_into_main_thread(async move {
+                if let Some(conn) = Connection::get() {
+                    conn.alert("Settings", &msg);
+                }
+            })
+            .detach();
         }
     });
 }
@@ -226,14 +234,22 @@ impl GuiFrontEnd {
                         | Alert::SetUserVar { .. },
                 } => {}
                 MuxNotification::Empty => {
-                    if config::configuration().quit_when_all_windows_are_closed {
-                        promise::spawn::spawn_into_main_thread(async move {
-                            if mux::activity::Activity::count() == 0 {
-                                log::trace!("Mux is now empty, terminate gui");
-                                Connection::get().unwrap().terminate_message_loop();
-                            }
-                        })
-                        .detach();
+                    #[cfg(target_os = "macos")]
+                    {
+                        // Keep the app process alive on macOS when the last
+                        // window closes, so Dock reopen is instant and consistent.
+                    }
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        if config::configuration().quit_when_all_windows_are_closed {
+                            promise::spawn::spawn_into_main_thread(async move {
+                                if mux::activity::Activity::count() == 0 {
+                                    log::trace!("Mux is now empty, terminate gui");
+                                    Connection::get().unwrap().terminate_message_loop();
+                                }
+                            })
+                            .detach();
+                        }
                     }
                 }
                 MuxNotification::SaveToDownloads { name, data } => {
@@ -268,7 +284,7 @@ impl GuiFrontEnd {
                                         Clipboard::PrimarySelection
                                     }
                                 },
-                                clipboard.unwrap_or_else(String::new),
+                                clipboard.unwrap_or_default(),
                             );
                         } else {
                             log::error!("Cannot assign clipboard as there are no windows");
@@ -284,6 +300,7 @@ impl GuiFrontEnd {
         if window_funcs::take_appearance_queried_before_gui_ready() {
             config::reload();
         }
+        refresh_fast_config_snapshot();
 
         // Build the initial menu bar synchronously during startup.
         // AppKit may inspect menu item selectors during reopen events,
@@ -294,7 +311,6 @@ impl GuiFrontEnd {
     }
 
     fn app_event_handler(event: ApplicationEvent) {
-        log::trace!("Got app event {event:?}");
         match event {
             ApplicationEvent::OpenCommandScript(file_name) => {
                 let is_directory = Path::new(&file_name).is_dir();
@@ -302,7 +318,7 @@ impl GuiFrontEnd {
                     None
                 } else {
                     match shlex::try_quote(&file_name) {
-                        Ok(name) => Some(name.to_owned().to_string()),
+                        Ok(name) => Some(name.into_owned()),
                         Err(_) => {
                             log::error!(
                                 "OpenCommandScript: {file_name} has embedded NUL bytes and
@@ -372,18 +388,45 @@ impl GuiFrontEnd {
                 // future.
 
                 fn spawn_command(spawn: &SpawnCommand, spawn_where: SpawnWhere) {
-                    let config = config::configuration();
+                    let config = fast_config_snapshot();
                     let dpi = config.dpi.unwrap_or_else(|| ::window::default_dpi());
-                    let size =
-                        config.initial_size(dpi as u32, crate::cell_pixel_dims(&config, dpi).ok());
+                    // Keep this path cheap when no GUI window exists yet:
+                    // avoid font metric resolution here and let the window layer
+                    // apply final geometry/pixel sizing.
+                    let size = config.initial_size(dpi as u32, None);
                     let term_config = Arc::new(config::TermConfig::with_config(config));
 
-                    crate::spawn::spawn_command_impl(spawn, spawn_where, size, None, term_config)
+                    crate::spawn::spawn_command_impl(spawn, spawn_where, size, None, term_config);
                 }
 
                 match action {
-                    KeyAssignment::EmitEvent(event) if event == "check-for-update" => {
-                        check_for_updates();
+                    KeyAssignment::EmitEvent(event)
+                        if event == "update-kaku" || event == "run-kaku-update" =>
+                    {
+                        spawn_command(
+                            &SpawnCommand {
+                                args: Some(vec!["kaku".to_string(), "update".to_string()]),
+                                ..Default::default()
+                            },
+                            SpawnWhere::NewWindow,
+                        );
+                    }
+                    KeyAssignment::EmitEvent(event) if event == "run-kaku-cli" => {
+                        spawn_command(
+                            &SpawnCommand {
+                                args: Some(vec!["kaku".to_string()]),
+                                ..Default::default()
+                            },
+                            SpawnWhere::NewWindow,
+                        );
+                    }
+                    KeyAssignment::EmitEvent(event) if event == "open-kaku-config" => {
+                        open_kaku_config();
+                    }
+                    KeyAssignment::ReloadConfiguration => {
+                        config::reload();
+                        refresh_fast_config_snapshot();
+                        persistent_toast_notification("Kaku", "Configuration reloaded");
                     }
                     KeyAssignment::QuitApplication => {
                         // If we get here, there are no windows that could have received
@@ -630,6 +673,12 @@ pub fn try_new() -> Result<Rc<GuiFrontEnd>, Error> {
 
     let config_subscription = config::subscribe_to_config_reload({
         move || {
+            // This callback may run while the config mutex is held;
+            // refresh asynchronously to avoid re-locking config here.
+            promise::spawn::spawn_into_main_thread(async {
+                refresh_fast_config_snapshot();
+            })
+            .detach();
             // TODO(macos): AppKit does not allow safe async menubar reconstruction
             // from a config-reload callback; the initial menubar is built synchronously
             // in try_new(). Re-enable on macOS once a safe main-thread dispatch path

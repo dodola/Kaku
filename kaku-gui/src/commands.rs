@@ -448,20 +448,49 @@ impl CommandDef {
                             Some(kaku_perform_key_assignment_sel),
                             "",
                         );
-                        about_item.set_tool_tip("Click to visit GitHub");
+                        about_item.set_tool_tip("Run `kaku` in the active terminal pane");
                         about_item.set_represented_item(RepresentedItem::KeyAssignment(
-                            KeyAssignment::OpenUri("https://github.com/tw93/Kaku".to_string()),
+                            KeyAssignment::EmitEvent("run-kaku-cli".to_string()),
                         ));
-
                         menu.add_item(&about_item);
 
+                        let settings_item = MenuItem::new_with(
+                            "Settings...",
+                            Some(kaku_perform_key_assignment_sel),
+                            ",",
+                        );
+                        settings_item
+                            .set_key_equiv_modifier_mask(NSEventModifierFlags::NSCommandKeyMask);
+                        settings_item.set_tool_tip("Open and edit user kaku.lua");
+                        settings_item.set_represented_item(RepresentedItem::KeyAssignment(
+                            KeyAssignment::EmitEvent("open-kaku-config".to_string()),
+                        ));
+                        menu.add_item(&settings_item);
+
+                        let reload_item = MenuItem::new_with(
+                            "Reload Configuration",
+                            Some(kaku_perform_key_assignment_sel),
+                            ".",
+                        );
+                        reload_item.set_key_equiv_modifier_mask(
+                            NSEventModifierFlags::NSCommandKeyMask
+                                | NSEventModifierFlags::NSShiftKeyMask,
+                        );
+                        reload_item.set_tool_tip("Reload configuration from kaku.lua");
+                        reload_item.set_represented_item(RepresentedItem::KeyAssignment(
+                            KeyAssignment::ReloadConfiguration,
+                        ));
+                        menu.add_item(&reload_item);
+
+                        menu.add_item(&MenuItem::new_separator());
+
                         let check_update = MenuItem::new_with(
-                            "Update Kaku...",
+                            "Check for Updates...",
                             Some(kaku_perform_key_assignment_sel),
                             "",
                         );
                         check_update.set_represented_item(RepresentedItem::KeyAssignment(
-                            KeyAssignment::EmitEvent("check-for-update".to_string()),
+                            KeyAssignment::EmitEvent("run-kaku-update".to_string()),
                         ));
                         menu.add_item(&check_update);
 
@@ -1274,9 +1303,9 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
         ReloadConfiguration => CommandDef {
             brief: "Reload configuration".into(),
             doc: "Reloads the configuration file".into(),
-            keys: vec![(Modifiers::SUPER, "r".into())],
+            keys: vec![(Modifiers::SUPER.union(Modifiers::SHIFT), ".".into())],
             args: &[],
-            menubar: &["Kaku"],
+            menubar: &[],
             icon: Some("md_reload"),
         },
         QuitApplication => CommandDef {

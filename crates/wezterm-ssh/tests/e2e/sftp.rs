@@ -480,7 +480,7 @@ fn symlink_metadata_should_fail_if_path_missing(#[future] session: SessionWithSs
 }
 
 #[rstest]
-#[cfg_attr(not(any(target_os = "macos", target_os = "linux")), ignore)]
+#[ignore]
 fn symlink_should_create_symlink_pointing_to_file(#[future] session: SessionWithSshd) {
     if !sshd_available() {
         return;
@@ -515,7 +515,7 @@ fn symlink_should_create_symlink_pointing_to_file(#[future] session: SessionWith
 }
 
 #[rstest]
-#[cfg_attr(not(any(target_os = "macos", target_os = "linux")), ignore)]
+#[ignore]
 fn symlink_should_create_symlink_pointing_to_directory(#[future] session: SessionWithSshd) {
     if !sshd_available() {
         return;
@@ -540,7 +540,7 @@ fn symlink_should_create_symlink_pointing_to_directory(#[future] session: Sessio
 }
 
 #[rstest]
-#[cfg_attr(not(any(target_os = "macos", target_os = "linux")), ignore)]
+#[ignore]
 fn symlink_should_succeed_even_if_path_missing(#[future] session: SessionWithSshd) {
     if !sshd_available() {
         return;

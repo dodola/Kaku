@@ -29,8 +29,8 @@
 ## Quick Start
 
 1. [Download Kaku DMG](https://github.com/tw93/Kaku/releases/latest) & Drag to Applications
-2. Or install with Homebrew: `brew tap tw93/tap && brew install --cask tw93/tap/kaku`
-3. Open Kaku. If macOS blocks the app, go to System Settings → Privacy & Security → click "Open Anyway"
+2. Or install with Homebrew: `brew install tw93/tap/kaku`
+3. Open Kaku. The app is notarized by Apple, so it opens without security warnings
 4. On first launch, Kaku will automatically set up your shell environment
 
 ## Usage Guide
@@ -72,6 +72,12 @@ Kaku is fully configurable via standard Lua scripts and is 100% compatible with 
 On macOS, bundled defaults in `Kaku.app/Contents/Resources/kaku.lua` are fallback only, so user config is loaded first.
 
 Use a single user config path: `~/.config/kaku/kaku.lua`.
+
+### Updates & Reset
+
+- Check/apply update from CLI: `kaku update`
+- Remove Kaku-managed shell defaults and integration: `kaku reset` (or non-interactive `kaku reset --yes`)
+- GUI auto-update check uses numeric version comparison (for example `0.1.10` is correctly newer than `0.1.9`).
 
 ## Why Kaku?
 

@@ -187,6 +187,12 @@ pub struct SimpleExecutor {
     rx: Receiver<SpawnFunc>,
 }
 
+impl Default for SimpleExecutor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SimpleExecutor {
     pub fn new() -> Self {
         let (tx, rx) = unbounded();
@@ -224,6 +230,12 @@ impl SimpleExecutor {
 }
 
 pub struct ScopedExecutor {}
+
+impl Default for ScopedExecutor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl ScopedExecutor {
     pub fn new() -> Self {

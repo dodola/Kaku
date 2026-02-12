@@ -45,7 +45,7 @@ fn pixman() {
         "pixman-trap.c",
         "pixman-utils.c",
     ] {
-        cfg.file(&format!("pixman/pixman/{f}"));
+        cfg.file(format!("pixman/pixman/{f}"));
     }
 
     cfg.include("pixman/pixman");
@@ -190,7 +190,7 @@ fn cairo() {
         // "util/cairo-missing/strndup.c",
         // "util/malloc-stats.c",
     ] {
-        cfg.file(&format!("cairo/{f}"));
+        cfg.file(format!("cairo/{f}"));
     }
 
     cfg.include("cairo/src");

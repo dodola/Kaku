@@ -54,44 +54,32 @@ else
     echo -e "${GREEN}done ✅${NC}"
 fi
 
-# Configure git to use delta
-echo -n "  Configuring git... "
-git config --global core.pager "delta"
-git config --global interactive.diffFilter "delta --color-only"
-git config --global delta.navigate true
-git config --global delta.pager "less --mouse --wheel-lines=3 -R -F -X"
-git config --global delta.line-numbers true
-git config --global delta.side-by-side true
-git config --global delta.line-fill-method "spaces"
+set_git_config_if_missing() {
+    local key="$1"
+    local value="$2"
+    if git config --global --get-all "$key" >/dev/null 2>&1; then
+        return
+    fi
+    git config --global "$key" "$value"
+}
+
+# Configure git to use delta without overriding existing user preferences.
+echo -n "  Configuring git defaults (missing keys only)... "
+set_git_config_if_missing "core.pager" "delta"
+set_git_config_if_missing "interactive.diffFilter" "delta --color-only"
+set_git_config_if_missing "delta.navigate" "true"
+set_git_config_if_missing "delta.pager" "less --mouse --wheel-lines=3 -R -F -X"
+set_git_config_if_missing "delta.line-numbers" "true"
+set_git_config_if_missing "delta.side-by-side" "true"
+set_git_config_if_missing "delta.line-fill-method" "spaces"
 echo -e "${GREEN}done ✅${NC}"
 
-# Set delta theme
-echo -n "  Applying Kaku-aligned style... "
-git config --global delta.syntax-theme "Coldark-Dark"
-git config --global delta.file-style "omit"
-git config --global delta.file-decoration-style "omit"
-git config --global delta.hunk-header-style "file line-number syntax"
-
-# Clear previously customized colors so the selected syntax theme controls rendering.
-for key in \
-  delta.hunk-header-file-style \
-  delta.hunk-header-line-number-style \
-  delta.hunk-header-decoration-style \
-  delta.line-numbers-left-style \
-  delta.line-numbers-right-style \
-  delta.line-numbers-minus-style \
-  delta.line-numbers-plus-style \
-  delta.file-added-label \
-  delta.file-copied-label \
-  delta.file-modified-label \
-  delta.file-removed-label \
-  delta.file-renamed-label \
-  delta.minus-style \
-  delta.minus-emph-style \
-  delta.plus-style \
-  delta.plus-emph-style; do
-  git config --global --unset-all "$key" 2>/dev/null || true
-done
+# Set Kaku-aligned style defaults without overriding existing values.
+echo -n "  Applying Kaku style defaults (missing keys only)... "
+set_git_config_if_missing "delta.syntax-theme" "Coldark-Dark"
+set_git_config_if_missing "delta.file-style" "omit"
+set_git_config_if_missing "delta.file-decoration-style" "omit"
+set_git_config_if_missing "delta.hunk-header-style" "file line-number syntax"
 echo -e "${GREEN}done ✅${NC}"
 
 echo ""
