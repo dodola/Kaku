@@ -32,19 +32,36 @@ if [[ "${KAKU_INIT_INTERNAL:-0}" != "1" ]]; then
 		exec "${KAKU_BIN}" init "$@"
 	fi
 
-	for candidate in \
-		"$SCRIPT_DIR/../MacOS/kaku" \
-		"/Applications/Kaku.app/Contents/MacOS/kaku" \
-		"$HOME/Applications/Kaku.app/Contents/MacOS/kaku"; do
-		if [[ -x "$candidate" ]]; then
-			exec "$candidate" init "$@"
-		fi
-	done
+	# Detect OS
+	OS_TYPE="$(uname -s)"
+	
+	if [[ "$OS_TYPE" == "Darwin" ]]; then
+		# macOS paths
+		for candidate in \
+			"$SCRIPT_DIR/../MacOS/kaku" \
+			"/Applications/Kaku.app/Contents/MacOS/kaku" \
+			"$HOME/Applications/Kaku.app/Contents/MacOS/kaku"; do
+			if [[ -x "$candidate" ]]; then
+				exec "$candidate" init "$@"
+			fi
+		done
+	elif [[ "$OS_TYPE" == "Linux" ]]; then
+		# Linux paths
+		for candidate in \
+			"/usr/local/bin/kaku" \
+			"/usr/bin/kaku" \
+			"$HOME/.local/bin/kaku"; do
+			if [[ -x "$candidate" ]]; then
+				exec "$candidate" init "$@"
+			fi
+		done
+	fi
 fi
 
 # Resolve resources by script location first so setup works regardless of app install path.
-# - App bundle:   setup_zsh.sh in Resources/, vendor in Resources/vendor
-# - Dev checkout: setup_zsh.sh in assets/shell-integration/, vendor in assets/vendor
+# - macOS App bundle:   setup_zsh.sh in Resources/, vendor in Resources/vendor
+# - Linux install:      setup_zsh.sh in /usr/share/kaku/, vendor in /usr/share/kaku/vendor
+# - Dev checkout:       setup_zsh.sh in assets/shell-integration/, vendor in assets/vendor
 if [[ -d "$SCRIPT_DIR/vendor" ]]; then
 	RESOURCES_DIR="$SCRIPT_DIR"
 elif [[ -d "$SCRIPT_DIR/../vendor" ]]; then
@@ -53,6 +70,12 @@ elif [[ -d "/Applications/Kaku.app/Contents/Resources/vendor" ]]; then
 	RESOURCES_DIR="/Applications/Kaku.app/Contents/Resources"
 elif [[ -d "$HOME/Applications/Kaku.app/Contents/Resources/vendor" ]]; then
 	RESOURCES_DIR="$HOME/Applications/Kaku.app/Contents/Resources"
+elif [[ -d "/usr/share/kaku/vendor" ]]; then
+	RESOURCES_DIR="/usr/share/kaku"
+elif [[ -d "/usr/local/share/kaku/vendor" ]]; then
+	RESOURCES_DIR="/usr/local/share/kaku"
+elif [[ -d "$HOME/.local/share/kaku/vendor" ]]; then
+	RESOURCES_DIR="$HOME/.local/share/kaku"
 else
 	echo -e "${YELLOW}Error: Could not locate Kaku resources (vendor directory missing).${NC}"
 	exit 1
@@ -319,5 +342,8 @@ configure_touchid() {
 }
 
 if [[ "$UPDATE_ONLY" != "true" ]]; then
-	configure_touchid
+	# TouchID is macOS-specific
+	if [[ "$(uname -s)" == "Darwin" ]]; then
+		configure_touchid
+	fi
 fi

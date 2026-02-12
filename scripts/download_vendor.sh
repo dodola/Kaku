@@ -7,30 +7,52 @@ set -euo pipefail
 VENDOR_DIR="$(cd "$(dirname "$0")/../assets/vendor" && pwd)"
 mkdir -p "$VENDOR_DIR"
 
-echo "[1/4] Downloading Starship (Universal Binary)..."
+echo "[1/4] Downloading Starship..."
 STARSHIP_BIN="$VENDOR_DIR/starship"
 
-# Download both architectures
-URL_ARM64="https://github.com/starship/starship/releases/latest/download/starship-aarch64-apple-darwin.tar.gz"
-URL_X86_64="https://github.com/starship/starship/releases/latest/download/starship-x86_64-apple-darwin.tar.gz"
+# Detect OS
+OS_TYPE="$(uname -s)"
+ARCH="$(uname -m)"
 
 if [[ ! -f "$STARSHIP_BIN" ]]; then
-	echo "Creating Universal Binary for Starship..."
-	mkdir -p "$VENDOR_DIR/tmp_starship"
+	if [[ "$OS_TYPE" == "Darwin" ]]; then
+		echo "Creating Universal Binary for Starship (macOS)..."
+		# Download both architectures for macOS
+		URL_ARM64="https://github.com/starship/starship/releases/latest/download/starship-aarch64-apple-darwin.tar.gz"
+		URL_X86_64="https://github.com/starship/starship/releases/latest/download/starship-x86_64-apple-darwin.tar.gz"
+		
+		mkdir -p "$VENDOR_DIR/tmp_starship"
 
-	curl -L "$URL_ARM64" | tar -xz -C "$VENDOR_DIR/tmp_starship"
-	mv "$VENDOR_DIR/tmp_starship/starship" "$VENDOR_DIR/tmp_starship/starship_arm64"
+		curl -L "$URL_ARM64" | tar -xz -C "$VENDOR_DIR/tmp_starship"
+		mv "$VENDOR_DIR/tmp_starship/starship" "$VENDOR_DIR/tmp_starship/starship_arm64"
 
-	curl -L "$URL_X86_64" | tar -xz -C "$VENDOR_DIR/tmp_starship"
-	mv "$VENDOR_DIR/tmp_starship/starship" "$VENDOR_DIR/tmp_starship/starship_x86_64"
+		curl -L "$URL_X86_64" | tar -xz -C "$VENDOR_DIR/tmp_starship"
+		mv "$VENDOR_DIR/tmp_starship/starship" "$VENDOR_DIR/tmp_starship/starship_x86_64"
 
-	# Create Universal Binary using lipo
-	lipo -create -output "$STARSHIP_BIN" \
-		"$VENDOR_DIR/tmp_starship/starship_arm64" \
-		"$VENDOR_DIR/tmp_starship/starship_x86_64"
+		# Create Universal Binary using lipo
+		lipo -create -output "$STARSHIP_BIN" \
+			"$VENDOR_DIR/tmp_starship/starship_arm64" \
+			"$VENDOR_DIR/tmp_starship/starship_x86_64"
 
-	chmod +x "$STARSHIP_BIN"
-	rm -rf "$VENDOR_DIR/tmp_starship"
+		chmod +x "$STARSHIP_BIN"
+		rm -rf "$VENDOR_DIR/tmp_starship"
+	elif [[ "$OS_TYPE" == "Linux" ]]; then
+		echo "Downloading Starship for Linux ($ARCH)..."
+		if [[ "$ARCH" == "x86_64" ]]; then
+			URL="https://github.com/starship/starship/releases/latest/download/starship-x86_64-unknown-linux-gnu.tar.gz"
+		elif [[ "$ARCH" == "aarch64" ]] || [[ "$ARCH" == "arm64" ]]; then
+			URL="https://github.com/starship/starship/releases/latest/download/starship-aarch64-unknown-linux-gnu.tar.gz"
+		else
+			echo "Unsupported architecture: $ARCH"
+			exit 1
+		fi
+		
+		curl -L "$URL" | tar -xz -C "$VENDOR_DIR"
+		chmod +x "$STARSHIP_BIN"
+	else
+		echo "Unsupported OS: $OS_TYPE"
+		exit 1
+	fi
 else
 	echo "Starship already exists, skipping."
 fi
