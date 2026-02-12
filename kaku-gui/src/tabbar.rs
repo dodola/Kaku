@@ -213,9 +213,9 @@ fn compute_tab_title(
 }
 
 fn is_tab_hover(mouse_x: Option<usize>, x: usize, tab_title_len: usize) -> bool {
-    return mouse_x
+    mouse_x
         .map(|mouse_x| mouse_x >= x && mouse_x < x + tab_title_len)
-        .unwrap_or(false);
+        .unwrap_or(false)
 }
 
 impl TabBarState {
@@ -410,7 +410,7 @@ impl TabBarState {
         let available_cells = title_width.saturating_sub(controls_width);
         let tab_width_max = if config.use_fancy_tab_bar || available_cells >= titles_len {
             // We can render each title with its full width
-            usize::max_value()
+            usize::MAX
         } else {
             // We need to clamp the length to balance them out
             available_cells / number_of_tabs
@@ -430,10 +430,10 @@ impl TabBarState {
 
         if use_integrated_title_buttons
             && config.integrated_title_button_style == IntegratedTitleButtonStyle::MacOsNative
-            && config.use_fancy_tab_bar == false
-            && config.tab_bar_at_bottom == false
+            && !config.use_fancy_tab_bar
+            && !config.tab_bar_at_bottom
         {
-            for _ in 0..10 as usize {
+            for _ in 0..10_usize {
                 line.insert_cell(0, black_cell.clone(), title_width, SEQ_ZERO);
                 x += 1;
             }

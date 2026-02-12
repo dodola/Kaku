@@ -6,7 +6,6 @@ use config::keyassignment::{
 use config::{ConfigHandle, MouseEventAltScreen, MouseEventTriggerMods};
 use std::collections::HashMap;
 use std::time::Duration;
-// use wezterm_dynamic::{ToDynamic, Value};
 use wezterm_term::input::MouseButton;
 use window::{KeyCode, Modifiers, PhysKeyCode, UIKeyCapRendering};
 
@@ -428,7 +427,7 @@ impl InputMap {
     pub fn is_leader(&self, key: &KeyCode, mods: Modifiers) -> Option<std::time::Duration> {
         if let Some((leader_key, leader_mods, timeout)) = self.leader.as_ref() {
             if *leader_key == *key && *leader_mods == mods.remove_positional_mods() {
-                return Some(timeout.clone());
+                return Some(*timeout);
             }
         }
         None

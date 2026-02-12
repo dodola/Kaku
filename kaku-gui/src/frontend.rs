@@ -284,7 +284,7 @@ impl GuiFrontEnd {
                                         Clipboard::PrimarySelection
                                     }
                                 },
-                                clipboard.unwrap_or_else(String::new),
+                                clipboard.unwrap_or_default(),
                             );
                         } else {
                             log::error!("Cannot assign clipboard as there are no windows");
@@ -318,7 +318,7 @@ impl GuiFrontEnd {
                     None
                 } else {
                     match shlex::try_quote(&file_name) {
-                        Ok(name) => Some(name.to_owned().to_string()),
+                        Ok(name) => Some(name.into_owned()),
                         Err(_) => {
                             log::error!(
                                 "OpenCommandScript: {file_name} has embedded NUL bytes and

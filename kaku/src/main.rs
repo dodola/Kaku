@@ -23,8 +23,6 @@ mod init;
 mod reset;
 mod update;
 
-//    let message = "; ❤ 😍🤢\n\x1b[91;mw00t\n\x1b[37;104;m bleet\x1b[0;m.";
-
 #[derive(Debug, Parser)]
 #[command(
     about = "Kaku Terminal Emulator\nhttp://github.com/tw93/Kaku",
@@ -366,7 +364,9 @@ impl ImgCatCommand {
 
                     candidates.sort_by(|a, b| (a.0 * a.1).cmp(&(b.0 * b.1)));
 
-                    candidates.pop().unwrap()
+                    // candidates is non-empty because at least one scaling
+                    // direction always satisfies the constraint above.
+                    candidates.pop().expect("at least one candidate fits")
                 } else {
                     (width, height)
                 }
